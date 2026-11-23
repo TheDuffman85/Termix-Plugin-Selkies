@@ -1,0 +1,40 @@
+# A local Termix and a Selkies desktop for trying the plugin.
+#
+#   docker compose -f dev/docker-compose.yml up -d
+#   open http://localhost:8080, make an admin, turn on Plugin developer mode
+#   (Settings, General) and make an API key (Settings, API keys), then:
+#   npx termix-plugin dev --server http://localhost:8080 --key tmx_...
+#
+# In Termix add a host with address "webtop", turn on Selkies, keep HTTPS and
+# port 3001, and use the login abc / termix. Termix reaches the desktop over
+# this compose network; "Open in browser" needs the address your browser
+# reaches it at, https://localhost:3001/, under Address for Open in browser.
+#
+# The web client needs HTTPS. http://localhost counts as secure in browsers,
+# so the local Termix on plain HTTP works for testing.
+services:
+  termix:
+    image: ghcr.io/termix-ssh/termix:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - termix-data:/app/data
+
+  webtop:
+    image: lscr.io/linuxserver/webtop:latest
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - CUSTOM_USER=abc
+      - PASSWORD=termix
+      - SELKIES_AUDIO_ENABLED=true
+      - SELKIES_MICROPHONE_ENABLED=true
+    ports:
+      - "3001:3001"
+    shm_size: "1gb"
+
+volumes:
+  termix-data:

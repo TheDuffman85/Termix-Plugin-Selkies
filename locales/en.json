@@ -1,0 +1,108 @@
+{
+  "plugin": {
+    "name": "Selkies",
+    "description": "Selkies remote desktops from linuxserver/docker-baseimage-selkies containers in a Termix tab, with sound."
+  },
+  "tab": {
+    "title": "Selkies",
+    "noHost": "Pick a host with Selkies turned on.",
+    "connecting": "Opening the desktop…",
+    "reconnect": "Reconnect",
+    "openInBrowser": "Open in browser",
+    "browserHint": "Microphone, gamepads and fullscreen work in the browser window.",
+    "palette": "Open Selkies desktop",
+    "app": {
+      "title": "The desktop opens in your browser",
+      "hint": "The Termix app can't show the desktop inside the app, so it opens in your phone's browser. It still goes through Termix, so it works wherever the app does. The link is only for you and stops working when you close this tab or press Reconnect.",
+      "open": "Open desktop"
+    },
+    "errors": {
+      "generic": "The desktop could not be opened.",
+      "disabled": "Selkies is turned off on this server.",
+      "notEnabled": "Selkies is not turned on for this host.",
+      "notSelkies": "The configured address did not report active Selkies WebSocket mode. Check the port and path.",
+      "unreachable": "The Selkies container did not answer. Check the address, port and connection route.",
+      "unauthorized": "The Selkies container refused the login. Check the username and password.",
+      "forbidden": "You may not connect to this host."
+    }
+  },
+  "hosts": {
+    "title": "Selkies",
+    "description": "Remote desktop from a linuxserver Selkies container, such as webtop.",
+    "login": "Login",
+    "scheme": "Protocol",
+    "schemeHelp": "The linuxserver images serve HTTPS on 3001 and plain HTTP on 3000.",
+    "port": "Port",
+    "path": "Path",
+    "pathHelp": "The container's SUBFOLDER, like /desktop/. Leave / when it has none.",
+    "route": "Reach the container",
+    "routeDirect": "Directly from the Termix server",
+    "routeSsh": "Through this host's SSH connection",
+    "routeHelp": "Through SSH the container can stay bound to 127.0.0.1 on the host.",
+    "ignoreCert": "Accept a self-signed certificate",
+    "ignoreCertHelp": "The linuxserver images make their own certificate.",
+    "openInBrowser": "Open in browser",
+    "openInBrowserHelp": "Adds a button to the tab that opens the container's own page in a new browser tab. Use it for the microphone, gamepads and fullscreen, which the Termix tab can't offer. That page doesn't go through Termix: your browser connects to the container itself, so it only works where your browser can reach it, like on the same network or over a VPN. Sign in there with the container's login.",
+    "publicUrl": "Address for Open in browser",
+    "publicUrlHelp": "Leave empty to use this host's address with the protocol, port and path above. Set it when your browser reaches the container under another address, like a reverse proxy or a VPN name.",
+    "username": "Username",
+    "usernameHelp": "The container's CUSTOM_USER. Usually abc.",
+    "password": "Password",
+    "passwordHelp": "The container's PASSWORD. Leave empty when it has none.",
+    "passwordSaved": "Saved, type to change",
+    "authMethod": "Login from",
+    "authDirect": "Typed here",
+    "authCredential": "A saved credential",
+    "credential": "Credential",
+    "selectCredential": "Pick a credential",
+    "test": "Test connection",
+    "testing": "Testing…",
+    "testSaveFirst": "Save the host first, then test. The test uses the saved settings.",
+    "testOk": "The container answered with the saved login.",
+    "testFailed": "Test failed: {{error}}"
+  },
+  "permissions": {
+    "connect": {
+      "title": "Connect to Selkies desktops",
+      "description": "Open Selkies desktops on hosts they may connect to."
+    }
+  },
+  "settings": {
+    "admin": {
+      "enabled": {
+        "label": "Selkies desktops",
+        "description": "Turn off to close every way in to Selkies desktops."
+      }
+    },
+    "host": {
+      "enableSelkies": {
+        "label": "Selkies"
+      },
+      "selkiesPort": {
+        "label": "Selkies port"
+      },
+      "selkiesScheme": {
+        "label": "Selkies protocol",
+        "https": "HTTPS",
+        "http": "HTTP"
+      },
+      "selkiesPath": {
+        "label": "Selkies path"
+      },
+      "selkiesRoute": {
+        "label": "Selkies connection route",
+        "direct": "Direct",
+        "ssh": "Through SSH"
+      },
+      "selkiesIgnoreCert": {
+        "label": "Accept a self-signed certificate"
+      },
+      "selkiesOpenInBrowser": {
+        "label": "Selkies Open in browser"
+      },
+      "selkiesPublicUrl": {
+        "label": "Address for Open in browser"
+      }
+    }
+  }
+}

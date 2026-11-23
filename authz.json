@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Termix-SSH/Termix/main/scripts/authz/authz.schema.json",
+  "routes": {
+    "POST /plugin-api/selkies/launch/:hostId": {
+      "access": "user",
+      "permission": "selkies.connect",
+      "resource": { "kind": "host", "min": "connect" }
+    },
+    "POST /plugin-api/selkies/probe/:hostId": {
+      "access": "user",
+      "permission": "selkies.connect",
+      "resource": { "kind": "host", "min": "connect" }
+    },
+    "POST /plugin-api/selkies/sessions/:token/close": {
+      "access": "user",
+      "permission": "selkies.connect",
+      "note": "Ends only a session the caller opened; an unknown token answers closed: false"
+    },
+    "ALL /plugin-api/selkies/s/:token": {
+      "access": "public",
+      "callAllowed": true,
+      "params": { "token": "=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      "expect": { "owner": "refuse" },
+      "note": "Desktop page requires a live Selkies token, including for signed-in users"
+    },
+    "ALL /plugin-api/selkies/s/:token/*path": {
+      "access": "public",
+      "callAllowed": true,
+      "params": { "token": "=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      "expect": { "owner": "refuse" },
+      "note": "Desktop files and uploads require a live Selkies token"
+    },
+    "WS /plugin-ws/selkies/stream": {
+      "access": "public",
+      "note": "Public socket that checks its own session token, like the proxied page under /s/:token/",
+      "expect": { "anon": "any" }
+    }
+  }
+}

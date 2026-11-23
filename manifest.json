@@ -1,0 +1,169 @@
+{
+  "id": "selkies",
+  "name": "Selkies",
+  "version": "0.1.0",
+  "description": "Selkies remote desktops in WebSocket mode, such as linuxserver's webtop and other docker-baseimage-selkies images, in a Termix tab, with sound.",
+  "author": {
+    "name": "TheDuffman85"
+  },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/TheDuffman85/Termix-Plugin-Selkies",
+  "docs": "https://github.com/TheDuffman85/Termix-Plugin-Selkies/tree/main/docs",
+  "category": "Terminal",
+  "icon": "MonitorPlay",
+  "features": [
+    "Selkies desktops in WebSocket mode (webtop, any docker-baseimage-selkies image, or a server with the same layout) in a Termix tab",
+    "Desktop audio, keyboard, mouse, clipboard and file transfer through Termix",
+    "Reaches the container directly or through the host's SSH connection",
+    "The container's login stays on the server and never reaches the browser",
+    "Open in browser for microphone, gamepads and fullscreen"
+  ],
+  "env": [],
+  "engine": {
+    "termix": ">=26.11.2-0",
+    "api": "^2.7.0"
+  },
+  "capabilities": [
+    "hosts:read",
+    "users:impersonate",
+    "credentials:read",
+    "credentials:use",
+    "ssh:connect",
+    "network:serve",
+    "network:sockets",
+    "ui:surface"
+  ],
+  "contributes": {
+    "tabs": [
+      {
+        "id": "selkies",
+        "titleKey": "tab.title",
+        "icon": "MonitorPlay",
+        "openFrom": ["host-context-menu", "palette"]
+      }
+    ],
+    "protocols": [
+      {
+        "id": "selkies",
+        "defaultPort": 3001,
+        "hostLoginFallback": []
+      }
+    ],
+    "permissions": [
+      {
+        "name": "connect",
+        "titleKey": "permissions.connect.title",
+        "descriptionKey": "permissions.connect.description",
+        "defaultRoles": ["admin", "user"]
+      }
+    ],
+    "settings": {
+      "admin": [
+        {
+          "key": "enabled",
+          "type": "boolean",
+          "labelKey": "settings.admin.enabled.label",
+          "descriptionKey": "settings.admin.enabled.description",
+          "default": true
+        }
+      ],
+      "host": {
+        "fields": [
+          {
+            "key": "enableSelkies",
+            "type": "boolean",
+            "labelKey": "settings.host.enableSelkies.label",
+            "default": false,
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesPort",
+            "type": "number",
+            "labelKey": "settings.host.selkiesPort.label",
+            "min": 1,
+            "max": 65535,
+            "default": 3001,
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesScheme",
+            "type": "select",
+            "labelKey": "settings.host.selkiesScheme.label",
+            "options": [
+              {
+                "value": "https",
+                "labelKey": "settings.host.selkiesScheme.https"
+              },
+              {
+                "value": "http",
+                "labelKey": "settings.host.selkiesScheme.http"
+              }
+            ],
+            "default": "https",
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesPath",
+            "type": "string",
+            "labelKey": "settings.host.selkiesPath.label",
+            "default": "/",
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesRoute",
+            "type": "select",
+            "labelKey": "settings.host.selkiesRoute.label",
+            "options": [
+              {
+                "value": "direct",
+                "labelKey": "settings.host.selkiesRoute.direct"
+              },
+              {
+                "value": "ssh",
+                "labelKey": "settings.host.selkiesRoute.ssh"
+              }
+            ],
+            "default": "direct",
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesIgnoreCert",
+            "type": "boolean",
+            "labelKey": "settings.host.selkiesIgnoreCert.label",
+            "default": true,
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesOpenInBrowser",
+            "type": "boolean",
+            "labelKey": "settings.host.selkiesOpenInBrowser.label",
+            "default": false,
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesPublicUrl",
+            "type": "string",
+            "labelKey": "settings.host.selkiesPublicUrl.label",
+            "default": "",
+            "hidden": true,
+            "defaultable": false
+          }
+        ]
+      }
+    },
+    "mobile": {
+      "mode": "webview",
+      "views": ["selkies"],
+      "sizes": ["phone", "tablet"]
+    }
+  },
+  "locales": "locales",
+  "platforms": ["linux", "win32", "darwin"]
+}
