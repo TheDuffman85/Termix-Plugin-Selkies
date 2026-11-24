@@ -1,11 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { HOST_PROTOCOL_SECRET_KEPT } from "@termix-ssh/plugin-sdk/frontend";
 import {
   renderWithApp,
   type RenderedPluginApp,
 } from "@termix-ssh/plugin-sdk/testing";
 import type { PluginManifest } from "@termix-ssh/plugin-sdk/manifest";
 import * as plugin from "../../src/frontend/index";
+import { KeptSecret } from "../../src/frontend/HostEditorSelkiesSection";
 import manifestJson from "../../manifest.json";
 import locales from "../../locales/en.json";
 
@@ -22,6 +31,9 @@ vi.mock("@termix-ssh/plugin-sdk/frontend", async (importOriginal) => {
 });
 
 const manifest = manifestJson as unknown as PluginManifest;
+
+const readLogin = (form: Record<string, unknown>) =>
+  (form.protocolAuth as Record<string, unknown>).selkies;
 const TOKEN = "k".repeat(43);
 
 const host = {
@@ -413,6 +425,86 @@ describe(`${manifest.id} frontend`, () => {
         },
       },
     });
+  });
+
+  it("keeps a saved password and token until they are typed over or cleared", async () => {
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    const kept = () => ({
+      protocolAuth: {
+        selkies: {
+          authType: "direct",
+          credentialId: "",
+          username: "abc",
+          password: HOST_PROTOCOL_SECRET_KEPT,
+          fields: { token: HOST_PROTOCOL_SECRET_KEPT },
+        },
+      },
+    });
+    let form: Record<string, unknown> = kept();
+    const updateForm = vi.fn(
+      (patch: (f: Record<string, unknown>) => Record<string, unknown>) => {
+        form = { ...form, ...patch(form) };
+      },
+    );
+    rendered.renderHostEditorSection("selkies", {
+      form,
+      setField: vi.fn(),
+      updateForm,
+      protocols: { enableSelkies: true },
+      advanced: true,
+    });
+    const token = screen.getByLabelText(locales.hosts.token);
+    const password = screen
+      .getAllByPlaceholderText(locales.hosts.passwordSaved)
+      .find((input) => input !== token)!;
+    // Clicking or tabbing through the fields leaves both secrets saved.
+    for (const input of [password, token]) {
+      fireEvent.focus(input);
+      fireEvent.blur(input);
+    }
+    expect(updateForm).not.toHaveBeenCalled();
+    expect(form).toEqual(kept());
+
+    fireEvent.change(password, { target: { value: "new" } });
+    expect(readLogin(form)).toMatchObject({
+      password: "new",
+      fields: { token: HOST_PROTOCOL_SECRET_KEPT },
+    });
+    const clearLabel = (field: string) =>
+      locales.hosts.clearSavedLabel.replace("{{field}}", field);
+    fireEvent.click(screen.getByLabelText(clearLabel(locales.hosts.token)));
+    expect(readLogin(form)).toMatchObject({ fields: { token: "" } });
+  });
+
+  it("keeps focus in a saved secret's field while typing over it", async () => {
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    function Harness() {
+      const [value, setValue] = useState(HOST_PROTOCOL_SECRET_KEPT);
+      const kept = value === HOST_PROTOCOL_SECRET_KEPT;
+      return (
+        <KeptSecret
+          kept={kept}
+          clearText="Clear"
+          clearLabel="Clear the saved password"
+          onClear={() => setValue("")}
+        >
+          <input
+            aria-label="secret"
+            value={kept ? "" : value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        </KeptSecret>
+      );
+    }
+    render(<Harness />);
+    const input = screen.getByLabelText("secret") as HTMLInputElement;
+    input.focus();
+    fireEvent.change(input, { target: { value: "n" } });
+    // The same element, still focused, and Clear is gone.
+    expect(screen.getByLabelText("secret")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("n");
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("offers Docker management as an optional per-host setting", async () => {

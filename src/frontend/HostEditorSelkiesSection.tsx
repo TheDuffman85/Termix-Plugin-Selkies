@@ -239,6 +239,43 @@ function Field({
   );
 }
 
+/**
+ * A secret field that may hold a saved secret. The saved one stays until the
+ * person types a new one or presses Clear: focusing the field changes nothing.
+ */
+export function KeptSecret({
+  kept,
+  clearText,
+  clearLabel,
+  onClear,
+  children,
+}: {
+  kept: boolean;
+  clearText: string;
+  clearLabel: string;
+  onClear: () => void;
+  children: ReactNode;
+}) {
+  // The same elements whether or not a secret is kept: typing the first
+  // character drops the kept one, and a changed tree would remount the input
+  // and take its focus. Only the button after it comes and goes.
+  return (
+    <div className="flex items-center gap-2">
+      <div className="min-w-0 flex-1">{children}</div>
+      {kept && (
+        <Button
+          size="sm"
+          variant="outline"
+          aria-label={clearLabel}
+          onClick={onClear}
+        >
+          {clearText}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
   const { t } = useTranslation();
   const form = readForm(props.form as Record<string, unknown> | undefined);
@@ -555,32 +592,46 @@ export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
                 />
               </Field>
               <Field label={t("hosts.password")} help={t("hosts.passwordHelp")}>
-                <PasswordInput
-                  className="h-8 pr-8 text-xs"
-                  placeholder={
-                    passwordKept ? t("hosts.passwordSaved") : "••••••••"
-                  }
-                  value={passwordKept ? "" : form.login.password}
-                  onFocus={() => {
-                    if (passwordKept) setLogin("password", "");
-                  }}
-                  onChange={(event) => setLogin("password", event.target.value)}
-                />
+                <KeptSecret
+                  kept={passwordKept}
+                  clearText={t("hosts.clearSaved")}
+                  clearLabel={t("hosts.clearSavedLabel", {
+                    field: t("hosts.password"),
+                  })}
+                  onClear={() => setLogin("password", "")}
+                >
+                  <PasswordInput
+                    className="h-8 pr-8 text-xs"
+                    placeholder={
+                      passwordKept ? t("hosts.passwordSaved") : "••••••••"
+                    }
+                    value={passwordKept ? "" : form.login.password}
+                    onChange={(event) =>
+                      setLogin("password", event.target.value)
+                    }
+                  />
+                </KeptSecret>
               </Field>
             </div>
           )}
           {(advanced || token !== "") && (
             <Field label={t("hosts.token")} help={t("hosts.tokenHelp")}>
-              <PasswordInput
-                className="h-8 pr-8 text-xs"
-                aria-label={t("hosts.token")}
-                placeholder={tokenKept ? t("hosts.passwordSaved") : ""}
-                value={tokenKept ? "" : token}
-                onFocus={() => {
-                  if (tokenKept) setToken("");
-                }}
-                onChange={(event) => setToken(event.target.value)}
-              />
+              <KeptSecret
+                kept={tokenKept}
+                clearText={t("hosts.clearSaved")}
+                clearLabel={t("hosts.clearSavedLabel", {
+                  field: t("hosts.token"),
+                })}
+                onClear={() => setToken("")}
+              >
+                <PasswordInput
+                  className="h-8 pr-8 text-xs"
+                  aria-label={t("hosts.token")}
+                  placeholder={tokenKept ? t("hosts.passwordSaved") : ""}
+                  value={tokenKept ? "" : token}
+                  onChange={(event) => setToken(event.target.value)}
+                />
+              </KeptSecret>
             </Field>
           )}
           <div className="flex flex-wrap items-center gap-3">

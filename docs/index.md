@@ -1,7 +1,8 @@
 # Selkies
 
 Opens Selkies remote desktops in a Termix tab. Desktop audio, keyboard, mouse, clipboard and file
-transfer all work in the tab.
+uploads work in the tab. Downloading files from the desktop needs **Open in browser** (see
+[Microphone, gamepads, fullscreen and downloads](#microphone-gamepads-fullscreen-and-downloads)).
 
 ## Requirements
 
@@ -242,11 +243,11 @@ stop is logged and retried after another idle interval, using the last connectin
 If that user loses SSH/connect access, stop Selkies yourself or reconnect as a user who still has
 access.
 
-## Microphone, gamepads and fullscreen
+## Microphone, gamepads, fullscreen and downloads
 
-Termix runs plugin views in a locked-down frame and allows no microphone, gamepads, fullscreen
-or pointer lock there. The tab has video, desktop audio, keyboard, mouse and clipboard. For the
-rest, turn on **Open in browser** in the host's Selkies section (it's off by default, under
+Termix runs plugin views in a locked-down frame and allows no microphone, gamepads, fullscreen,
+pointer lock or file downloads there. The tab has video, desktop audio, keyboard, mouse,
+clipboard and file uploads. For the rest, turn on **Open in browser** in the host's Selkies section (it's off by default, under
 Advanced). The tab then has an **Open in browser** button that opens the container's own page in a
 new browser tab, where the Selkies client has everything.
 

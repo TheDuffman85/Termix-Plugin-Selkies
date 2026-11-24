@@ -203,23 +203,59 @@ export function takeMovedHeaders(search: URLSearchParams | string): {
   return { headers, search: rest ? `?${rest}` : "" };
 }
 
+/** The port a URL reaches, with the scheme's default filled in. */
+function effectivePort(url: URL): string {
+  if (url.port) return url.port;
+  if (url.protocol === "https:" || url.protocol === "wss:") return "443";
+  if (url.protocol === "http:" || url.protocol === "ws:") return "80";
+  return "";
+}
+
+/**
+ * Whether an absolute redirect points at the container itself. URL drops a
+ * scheme's default port ("http://host:80/" has host "host") while the Host
+ * header keeps it, so the two are compared by name and effective port.
+ */
+function isUpstreamUrl(url: URL, upstream: Upstream): boolean {
+  const own = new URL(upstream.origin);
+  return (
+    url.hostname === own.hostname && effectivePort(url) === effectivePort(own)
+  );
+}
+
+/** A URL or path without the session token in its query. */
+function withoutSessionToken(location: string): string {
+  const hash = location.indexOf("#");
+  const fragment = hash < 0 ? "" : location.slice(hash);
+  const beforeHash = hash < 0 ? location : location.slice(0, hash);
+  const mark = beforeHash.indexOf("?");
+  if (mark < 0) return location;
+  return (
+    beforeHash.slice(0, mark) +
+    stripSessionToken(beforeHash.slice(mark)) +
+    fragment
+  );
+}
+
 /**
  * A redirect the container sends, as a path relative to the page that asked,
  * so it stays inside this session whatever Termix's own base path is. Other
- * places are passed through unchanged.
+ * places are passed through, but never with the session token: it went to
+ * the container, never to the browser, and a redirect may repeat the query.
  */
 export function rewriteLocation(
   location: string,
   upstream: Upstream,
   requestRest: string,
 ): string {
+  if (upstream.token) location = withoutSessionToken(location);
   let target: string | null = null;
   if (location.startsWith("/") && !location.startsWith("//")) {
     target = location;
   } else {
     try {
       const url = new URL(location);
-      if (url.host === upstream.hostHeader) {
+      if (isUpstreamUrl(url, upstream)) {
         target = url.pathname + url.search + url.hash;
       }
     } catch {
@@ -227,20 +263,6 @@ export function rewriteLocation(
     }
   }
   if (target === null) return location;
-  if (upstream.token) {
-    // The token went to the container, never to the browser: keep it out of
-    // a redirect that repeats the request's query.
-    const hash = target.indexOf("#");
-    const fragment = hash < 0 ? "" : target.slice(hash);
-    const beforeHash = hash < 0 ? target : target.slice(0, hash);
-    const mark = beforeHash.indexOf("?");
-    if (mark >= 0) {
-      target =
-        beforeHash.slice(0, mark) +
-        stripSessionToken(beforeHash.slice(mark)) +
-        fragment;
-    }
-  }
   const base = upstream.path;
   const inside = target.startsWith(base)
     ? target.slice(base.length)
@@ -280,6 +302,20 @@ export function pageResponseHeaders(
     out.vary = "Origin";
   }
   return out;
+}
+
+/**
+ * Whether an answer is a page to show, which gets the shim. HTML sent as an
+ * attachment is a file being downloaded: it passes through byte for byte,
+ * with no size limit.
+ */
+export function isRewrittenPage(headers: IncomingHttpHeaders): boolean {
+  if (!/^\s*text\/html/i.test(String(headers["content-type"] ?? ""))) {
+    return false;
+  }
+  return !/^\s*attachment\s*(;|$)/i.test(
+    String(headers["content-disposition"] ?? ""),
+  );
 }
 
 const MAX_HTML_BYTES = 4 * 1024 * 1024;
@@ -464,8 +500,7 @@ export function forward(
         restPath,
         origin,
       );
-      const type = String(answer.headers["content-type"] ?? "");
-      if (/^text\/html/i.test(type) && req.method !== "HEAD") {
+      if (isRewrittenPage(answer.headers) && req.method !== "HEAD") {
         const chunks: Buffer[] = [];
         let size = 0;
         answer.on("data", (chunk: Buffer) => {

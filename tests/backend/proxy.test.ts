@@ -157,6 +157,36 @@ describe("headers", () => {
     expect(rewriteLocation("/desk/api/files/?token=t0k", sub, "/")).toBe(
       "api/files/",
     );
+    // Places outside the session keep the rest of their query.
+    expect(rewriteLocation("/other/?token=t0k&a=1", sub, "/")).toBe(
+      "/other/?a=1",
+    );
+    expect(
+      rewriteLocation("https://elsewhere.example/?token=t0k#x", sub, "/"),
+    ).toBe("https://elsewhere.example/#x");
+  });
+
+  it("recognizes the container on a default port", () => {
+    const http80 = localUpstream(80, "/", null, "saved-secret");
+    expect(http80.hostHeader).toBe("127.0.0.1:80");
+    expect(
+      rewriteLocation(
+        "http://127.0.0.1:80/api/files/?token=saved-secret",
+        http80,
+        "/",
+      ),
+    ).toBe("api/files/");
+    expect(
+      rewriteLocation(
+        "http://127.0.0.1/api/files/?token=saved-secret",
+        http80,
+        "/",
+      ),
+    ).toBe("api/files/");
+    // Another port on the same machine is another place.
+    expect(rewriteLocation("http://127.0.0.1:8080/x", http80, "/")).toBe(
+      "http://127.0.0.1:8080/x",
+    );
   });
 });
 
@@ -228,6 +258,15 @@ describe("forward", () => {
           "content-encoding": "gzip",
         });
         res.end(body);
+        return;
+      }
+      if (req.url === "/desk/report.html") {
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "content-disposition": 'attachment; filename="report.html"',
+          "content-length": "26",
+        });
+        res.end("<html><head></head></html>");
         return;
       }
       if (req.url === "/desk/locked") {
@@ -309,6 +348,15 @@ describe("forward", () => {
     expect(await response.text()).toBe("console.log(1)");
     expect(response.headers.get("content-type")).toBe("text/javascript");
     expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("passes HTML downloads through unchanged", async () => {
+    const response = await fetch(`${base}/report.html`);
+    expect(await response.text()).toBe("<html><head></head></html>");
+    expect(response.headers.get("content-length")).toBe("26");
+    expect(response.headers.get("content-disposition")).toBe(
+      'attachment; filename="report.html"',
+    );
   });
 
   it("passes the query on as written and keeps a file's size", async () => {

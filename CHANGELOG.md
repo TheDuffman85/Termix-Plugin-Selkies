@@ -13,7 +13,7 @@
 - Test connection and the tab explain a server in WebRTC mode, or one in secure mode without a valid token
 - Reaches the container directly or through the host's SSH connection
 - The container's login is kept by Termix and added on the server, never sent to the browser
-- Open in browser, for microphone, gamepads and fullscreen, turned on per host (off by default)
+- Open in browser, for microphone, gamepads, fullscreen and file downloads, turned on per host (off by default)
 - Test connection in the host editor
 - Shows in the Termix mobile app, opened from a host; the desktop opens in the phone's browser
 
@@ -29,6 +29,9 @@
 - Launch stops waiting for the container, and opens no session, once the browser has dropped the request
 - The desktop stream answers 504 when the container doesn't answer its WebSocket upgrade within 30 seconds
 - Queries reach the container exactly as the client wrote them, and file downloads keep their size
+- HTML files downloaded from the desktop arrive unchanged, with no size limit, instead of rewritten like the desktop page
+- Focusing a saved password or access token in the host editor no longer clears it on save, and typing over it keeps the field focused; Clear removes it
+- A launch and a stop on request asked for at the same moment run one after the other instead of side by side
 - Desktop HTML in an encoding the proxy can't read is refused instead of sent garbled
 - Port and idle minutes in the host editor only save whole numbers in range
 - Disconnect shows that the desktop is disconnected rather than an error, and switching language no longer reconnects it
@@ -38,5 +41,6 @@
 
 - Rechecks Termix host access and connect policy, and closes active desktop streams when access ends
 - Caps the size of decompressed desktop HTML
+- Redirects from a container on port 80 or 443 stay inside the session, and no redirect carries the access token to the browser
 - Refuses escaped slashes and empty path segments, so refused Selkies routes can't be reached under another spelling
 - Each user has at most 20 open desktops, and a new desktop never ends another user's live one

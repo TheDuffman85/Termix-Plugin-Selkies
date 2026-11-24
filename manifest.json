@@ -14,10 +14,10 @@
   "features": [
     "Selkies desktops in WebSocket mode (webtop, any docker-baseimage-selkies image, or Selkies' own server and images) in a Termix tab",
     "Basic login, no login, or a Selkies access token for servers in secure mode",
-    "Desktop audio, keyboard, mouse, clipboard and file transfer through Termix",
+    "Desktop audio, keyboard, mouse, clipboard and file uploads through Termix",
     "Reaches the container directly or through the host's SSH connection",
     "The container's login stays on the server and never reaches the browser",
-    "Open in browser for microphone, gamepads and fullscreen",
+    "Open in browser for microphone, gamepads, fullscreen and file downloads",
     "Optional start on connect and stop after a configurable time with no connected desktops, for a Docker container or a systemd service",
     "Restart or stop the desktop from the tab, for example after logging out of it"
   ],

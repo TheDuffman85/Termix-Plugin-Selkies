@@ -767,6 +767,30 @@ describe("stop on request", () => {
     );
   });
 
+  it("never runs a stop beside a start asked for just before it", async () => {
+    const finish = hang();
+    const starting = manager.acquire(1, "user-1", settings);
+    const stopping = manager.stop(1, "user-1", settings);
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    // Give a racing stop every chance to reach SSH.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container start 'webtop'",
+      expect.anything(),
+    );
+    finish();
+    (await starting)();
+    await stopping;
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container stop --time 30 'webtop'",
+      expect.anything(),
+    );
+  });
+
   it("joins an idle stop under way", async () => {
     (await manager.acquire(1, "user-1", settings))();
     const finish = hang();

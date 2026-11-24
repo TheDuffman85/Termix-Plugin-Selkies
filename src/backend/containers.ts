@@ -292,8 +292,11 @@ export function createContainerManager(
       const entry = entryFor(hostId, userId, settings, target);
       const release = hold(entry);
       try {
-        // A reconnect during stop waits, then starts again. Commands never race.
-        await entry.stopping;
+        // A reconnect during stop waits, then starts again. Commands never
+        // race: the check below and the reservation after it run with no
+        // await in between, so a stop() can't slip into the gap. (Awaiting an
+        // unset `stopping` would still yield and open that gap.)
+        while (entry.stopping) await entry.stopping;
         if (disposed) throw new Error("Selkies is shutting down");
         let ownStart = false;
         if (!entry.starting) {
