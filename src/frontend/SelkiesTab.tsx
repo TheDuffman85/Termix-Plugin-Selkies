@@ -26,6 +26,8 @@ const ERROR_KEYS: Record<string, string> = {
   "not-selkies": "tab.errors.notSelkies",
   unreachable: "tab.errors.unreachable",
   unauthorized: "tab.errors.unauthorized",
+  "token-required": "tab.errors.tokenRequired",
+  "websocket-mode-inactive": "tab.errors.websocketModeInactive",
   "too-many-sessions": "tab.errors.tooManySessions",
   "access-denied": "tab.errors.forbidden",
   "access-required": "tab.errors.forbidden",

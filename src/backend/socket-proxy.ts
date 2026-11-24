@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { upstreamRequest } from "./proxy.js";
 import { isToken, type SessionStore } from "./sessions.js";
+import { withSessionToken } from "./upstream.js";
 
 /** Sockets the Selkies client opens below its api/ route. */
 const SOCKET_PATHS = new Set(["websockets", "webrtc/signaling"]);
@@ -104,7 +105,7 @@ export function createSocketProxy(
 
     const outgoing = upstreamRequest(upstream, {
       method: "GET",
-      path: upstream.path + target.path,
+      path: upstream.path + withSessionToken(target.path, upstream.token),
       headers,
     });
     let settled = false;

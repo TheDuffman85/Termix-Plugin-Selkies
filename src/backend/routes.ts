@@ -12,6 +12,7 @@ import { isToken, SessionLimitError, type SessionStore } from "./sessions.js";
 import {
   createDirectUpstream,
   createSshUpstream,
+  withSessionToken,
   type Upstream,
 } from "./upstream.js";
 
@@ -28,6 +29,8 @@ export interface UpstreamInput {
   settings: SelkiesHostSettings;
   username: string;
   password: string;
+  /** The Selkies session token for a server in secure mode, or "". */
+  token: string;
 }
 
 type Failure = { status: number; code: string; error: string };
@@ -107,11 +110,21 @@ function containerFailure(error: unknown): Failure {
   };
 }
 
-/** Selkies answers a plain GET with 204 when its WebSocket transport is active. */
+/** What the stream path answered to a plain GET. */
+export interface ProbeResult {
+  status: number;
+  /** The scheme of a 401's challenge, lowercased: "basic", "bearer" or "". */
+  challenge: string;
+}
+
+/**
+ * Selkies answers a plain GET with 204 when its WebSocket transport is active
+ * and 409 while another transport (WebRTC) is.
+ */
 export function probeUpstream(
   upstream: Upstream,
   timeoutMs = 10_000,
-): Promise<{ status: number }> {
+): Promise<ProbeResult> {
   return new Promise((resolve, reject) => {
     const headers: Record<string, string> = {
       host: upstream.hostHeader,
@@ -120,7 +133,7 @@ export function probeUpstream(
     if (upstream.authorization) headers.authorization = upstream.authorization;
     const request = upstreamRequest(upstream, {
       method: "GET",
-      path: `${upstream.path}api/websockets`,
+      path: upstream.path + withSessionToken("api/websockets", upstream.token),
       headers,
     });
     const timeout = setTimeout(() => {
@@ -130,7 +143,11 @@ export function probeUpstream(
     request.once("response", (answer) => {
       clearTimeout(timeout);
       answer.destroy();
-      resolve({ status: answer.statusCode ?? 0 });
+      const challenge = String(answer.headers["www-authenticate"] ?? "")
+        .trim()
+        .split(/\s/, 1)[0]!
+        .toLowerCase();
+      resolve({ status: answer.statusCode ?? 0, challenge });
     });
     request.once("error", (error) => {
       clearTimeout(timeout);
@@ -140,7 +157,20 @@ export function probeUpstream(
   });
 }
 
-function probeFailure(status: number): Failure | null {
+export function probeFailure(
+  { status, challenge }: ProbeResult,
+  hasToken: boolean,
+): Failure | null {
+  // Selkies' own server in secure mode: its api/ routes want a session token.
+  if (status === 401 && challenge === "bearer") {
+    return {
+      status: 409,
+      code: "token-required",
+      error: hasToken
+        ? "The Selkies server refused the access token"
+        : "The Selkies server is in secure mode and wants an access token",
+    };
+  }
   if (status === 401 || status === 403) {
     return {
       status: 409,
@@ -153,6 +183,14 @@ function probeFailure(status: number): Failure | null {
       status: 502,
       code: "unreachable",
       error: `The Selkies container answered ${status}`,
+    };
+  }
+  if (status === 409) {
+    return {
+      status: 502,
+      code: "websocket-mode-inactive",
+      error:
+        "The Selkies server is not in WebSocket mode. WebRTC mode can't go through Termix",
     };
   }
   return status === 204
@@ -187,6 +225,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
         ignoreCert: input.settings.ignoreCert,
         username: input.username,
         password: input.password,
+        token: input.token,
       };
       return input.settings.route === "ssh"
         ? createSshUpstream(ctx, hostId, target)
@@ -269,6 +308,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
         settings,
         username: target.auth.username,
         password: target.auth.password,
+        token: target.auth.fields?.token ?? "",
       });
     } catch (error) {
       release();
@@ -279,19 +319,19 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       // A freshly started desktop takes time to boot. Retry transport errors
       // and startup responses, but fail bad credentials immediately.
       const deadline = Date.now() + (settings.manageContainer ? 60_000 : 0);
-      let status: number;
+      let result: ProbeResult;
       for (;;) {
         // Nobody waits for the answer any more: stop probing.
         if (gone()) throw new Error("The request was cancelled");
         try {
-          ({ status } = await probeUpstream(
+          result = await probeUpstream(
             upstream,
             settings.manageContainer ? 2000 : 10_000,
-          ));
+          );
           if (
-            status === 204 ||
-            status === 401 ||
-            status === 403 ||
+            result.status === 204 ||
+            result.status === 401 ||
+            result.status === 403 ||
             Date.now() >= deadline
           )
             break;
@@ -300,7 +340,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
         }
         await delay(1000);
       }
-      const failure = probeFailure(status);
+      const failure = probeFailure(result, upstream.token !== null);
       if (failure) {
         upstream.close();
         release();

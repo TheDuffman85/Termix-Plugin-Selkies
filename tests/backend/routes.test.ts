@@ -19,7 +19,10 @@ import { fakeSelkies } from "./helpers.js";
 
 const manifest = manifestJson as unknown as PluginManifest;
 
-function target(password = "secret"): PluginProtocolTarget {
+function target(
+  password = "secret",
+  fields: Record<string, string> = {},
+): PluginProtocolTarget {
   return {
     host: {
       id: 1,
@@ -30,7 +33,7 @@ function target(password = "secret"): PluginProtocolTarget {
       jumpHosts: [],
     },
     shared: false,
-    auth: { authType: "direct", username: "abc", password, fields: {} },
+    auth: { authType: "direct", username: "abc", password, fields },
   };
 }
 
@@ -39,6 +42,7 @@ let mock: MockPluginContext;
 let server: http.Server;
 let base: string;
 let streamStatus: number;
+let streamChallenge: string | null;
 
 async function start(
   options: {
@@ -46,6 +50,7 @@ async function start(
     password?: string;
     enabled?: boolean;
     manageContainer?: boolean;
+    token?: string;
   } = {},
 ) {
   let router: Router | null = null;
@@ -69,7 +74,12 @@ async function start(
         authType: "direct",
       },
     ],
-    protocolTargets: { "1:selkies": target(options.password) },
+    protocolTargets: {
+      "1:selkies": target(
+        options.password,
+        options.token === undefined ? {} : { token: options.token },
+      ),
+    },
     settings: { enabled: options.enabled ?? true },
   } as Parameters<typeof createMockCtx>[0]);
   await mock.ctx.settings.setHost(1, "enableSelkies", true);
@@ -120,14 +130,18 @@ async function post(path: string, json?: unknown) {
 
 beforeEach(async () => {
   streamStatus = 204;
+  streamChallenge = null;
   selkies = await fakeSelkies((req, res) => {
     if (req.headers.authorization !== "Basic YWJjOnNlY3JldA==") {
       res.writeHead(401);
       res.end();
       return;
     }
-    if (req.url === "/desk/api/websockets") {
-      res.writeHead(streamStatus);
+    if (req.url?.startsWith("/desk/api/websockets")) {
+      res.writeHead(
+        streamStatus,
+        streamChallenge ? { "www-authenticate": streamChallenge } : {},
+      );
       res.end();
       return;
     }
@@ -478,7 +492,40 @@ describe("routes", () => {
     expect(selkies.upgrades).toHaveLength(0);
   });
 
-  it.each([200, 409])(
+  it("reports a server in WebRTC mode", async () => {
+    await start();
+    streamStatus = 409;
+    expect(await post("/probe/1")).toMatchObject({
+      status: 502,
+      body: { code: "websocket-mode-inactive" },
+    });
+  });
+
+  it("sends the saved access token to the stream probe", async () => {
+    await start({ token: " t0k " });
+    expect(await post("/probe/1")).toEqual({ status: 200, body: { ok: true } });
+    expect(selkies.seen[0].url).toBe("/desk/api/websockets?token=t0k");
+  });
+
+  it.each([
+    { token: undefined, error: /wants an access token/ },
+    { token: "t0k", error: /refused the access token/ },
+  ])(
+    "reports a secure-mode server that wants a token ($token)",
+    async ({ token, error }) => {
+      await start({ token });
+      streamStatus = 401;
+      streamChallenge = 'Bearer realm="Selkies Restricted"';
+      const result = await post("/probe/1");
+      expect(result).toMatchObject({
+        status: 409,
+        body: { code: "token-required" },
+      });
+      expect(result.body.error).toMatch(error);
+    },
+  );
+
+  it.each([200, 404])(
     "rejects HTTP %s from the stream probe",
     async (status) => {
       await start();

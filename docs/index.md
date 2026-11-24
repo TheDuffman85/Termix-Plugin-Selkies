@@ -12,14 +12,16 @@ The plugin doesn't look for a particular image. It needs a Selkies server that:
 - serves its web client at its base path (`/`, or the subfolder you set as **Path**) and the stream
   socket at `api/websockets` below it. A plain HTTP GET to that stream path must return `204` when
   WebSocket mode is active.
-- has **no login, or an HTTP Basic login**. Form, OAuth or cookie logins in front of it aren't
+- has **no login, an HTTP Basic login, or Selkies' secure mode with an access token** (see
+  [Other Selkies servers](#other-selkies-servers)). Form, OAuth or cookie logins in front of it aren't
   supported.
 
 Every image built on
 [linuxserver/docker-baseimage-selkies](https://github.com/linuxserver/docker-baseimage-selkies) does all
 of this out of the box, such as [webtop](https://docs.linuxserver.io/images/docker-webtop/), and it's what
-the plugin is tested against. Other Selkies servers work if they serve the same layout. The setup below
-uses the linuxserver names.
+the plugin is tested against. So does [Selkies' own server](https://github.com/selkies-project/selkies),
+run from its images, packages or `pip install selkies`. The setup below uses the linuxserver names and
+defaults; [Other Selkies servers](#other-selkies-servers) lists what differs.
 
 ## Set up a host
 
@@ -31,7 +33,8 @@ uses the linuxserver names.
      connection**. Through SSH, the container's port can stay bound to `127.0.0.1` on the host
      (`127.0.0.1:3001:3001` in Docker), and Termix reaches it the same way you would with `ssh -L`.
    - **Path**: the container's `SUBFOLDER`, if it has one.
-   - **Username** and **Password**: the container's `CUSTOM_USER` (usually `abc`) and `PASSWORD`.
+   - **Username** and **Password**: the container's `CUSTOM_USER` (usually `abc`, used when the field is
+     empty) and `PASSWORD`.
 3. Save, then press **Test connection**.
 
 Test connection uses the container's HTTP readiness probe to check that WebSocket mode is active.
@@ -57,6 +60,44 @@ environment:
 ports:
   - "127.0.0.1:3001:3001" # with "Through this host's SSH connection"
 ```
+
+## Other Selkies servers
+
+Selkies' own server serves the same web client and stream as the linuxserver images, so only the
+settings differ. For its
+[desktop images](https://github.com/selkies-project/selkies#readme), such as
+`ghcr.io/selkies-project/selkies/desktop`:
+
+- **Protocol** and **Port**: HTTPS on `8080`. A server you run yourself serves plain HTTP on `8080`
+  unless it was started with `--enable-https`. With HTTPS and its own certificate, keep **Accept a
+  self-signed certificate** on.
+- **Username** and **Password**: its Basic login, `ubuntu` and the `PASSWD` you set (`mypasswd` unless
+  changed). The server takes the user from `CUSTOM_USER`, `USERNAME` or `USER`, and the password from
+  `SELKIES_BASIC_AUTH_PASSWORD`, `PASSWORD` or `PASSWD`. Type the username: an empty one means `abc`.
+- **Path**: `/` unless something in front of it serves it under a path.
+- **Reach the container**: the server listens on `localhost` only unless it was started with `--public`
+  (or an address in `SELKIES_ADDR`). Choose **Through this host's SSH connection** to reach it there
+  without opening it to the network.
+
+### Secure mode and access tokens
+
+A Selkies server with `SELKIES_MASTER_TOKEN` set runs in secure mode: its stream and other `api/`
+routes want a session token. Put one in **Access token** in the host's Selkies login (under Advanced).
+Use a session token from the server's token table, from `--tokens-file` or `POST /api/tokens`, not the
+master token itself. Give it the `controller` role to use keyboard and mouse.
+
+Termix adds the token on the server, to the container's `api/` requests and the stream, so the browser
+never sees it. A Basic login, if the server also has one, is sent as well. **Open in browser** doesn't go
+through Termix, so it needs its own token in the address, such as `https://desk.example/#token=...`.
+
+Test connection reports a server in secure mode without a token, or with Basic login off and a wrong
+one. With Basic login on, Selkies accepts the page without a token, and a wrong token only shows when
+the desktop disconnects.
+
+### WebRTC mode
+
+The plugin needs Selkies' WebSocket mode, the default. A server in WebRTC mode (`--mode webrtc`) answers
+Test connection with "not in WebSocket mode". Switch it back to WebSocket mode.
 
 ## Start and stop Docker automatically
 
@@ -156,5 +197,9 @@ carry, so use WebSocket mode with this plugin.
   connection**. With HTTPS, keep **Accept a self-signed certificate** on unless the container
   has a real certificate.
 - **The container refused the login**: the username or password doesn't match the container's
-  `CUSTOM_USER` and `PASSWORD`.
+  `CUSTOM_USER` and `PASSWORD`. On Selkies' own images, the username is `ubuntu`, not the empty default.
+- **Secure mode wants an access token**: the server has a master token. Set **Access token** as in
+  [Secure mode and access tokens](#secure-mode-and-access-tokens).
+- **Not in WebSocket mode**: the server streams over WebRTC, which the Termix proxy can't carry. See
+  [WebRTC mode](#webrtc-mode).
 - **No sound**: click into the desktop once. Browsers start audio only after a click on the page.

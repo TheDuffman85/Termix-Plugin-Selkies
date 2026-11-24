@@ -6,7 +6,11 @@ import http, {
 import zlib from "node:zlib";
 import type { Duplex } from "node:stream";
 import type { Request, Response } from "express";
-import type { Upstream } from "./upstream.js";
+import {
+  stripSessionToken,
+  withSessionToken,
+  type Upstream,
+} from "./upstream.js";
 import { MOVED_HEADERS_PARAM, SHIM_PATH, SHIM_SOURCE } from "./shim.js";
 
 /**
@@ -223,6 +227,20 @@ export function rewriteLocation(
     }
   }
   if (target === null) return location;
+  if (upstream.token) {
+    // The token went to the container, never to the browser: keep it out of
+    // a redirect that repeats the request's query.
+    const hash = target.indexOf("#");
+    const fragment = hash < 0 ? "" : target.slice(hash);
+    const beforeHash = hash < 0 ? target : target.slice(0, hash);
+    const mark = beforeHash.indexOf("?");
+    if (mark >= 0) {
+      target =
+        beforeHash.slice(0, mark) +
+        stripSessionToken(beforeHash.slice(mark)) +
+        fragment;
+    }
+  }
   const base = upstream.path;
   const inside = target.startsWith(base)
     ? target.slice(base.length)
@@ -402,7 +420,7 @@ export function forward(
   return new Promise((resolve) => {
     const request = upstreamRequest(upstream, {
       method: req.method,
-      path: upstream.path + checked + search,
+      path: upstream.path + withSessionToken(checked + search, upstream.token),
       headers: upstreamRequestHeaders(req.headers, upstream, moved, !mayBePage),
     });
     let finished = false;

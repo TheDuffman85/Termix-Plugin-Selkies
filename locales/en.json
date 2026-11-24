@@ -1,7 +1,7 @@
 {
   "plugin": {
     "name": "Selkies",
-    "description": "Selkies remote desktops from linuxserver/docker-baseimage-selkies containers in a Termix tab, with sound."
+    "description": "Selkies remote desktops in a Termix tab, with sound: linuxserver's docker-baseimage-selkies containers or Selkies' own server."
   },
   "tab": {
     "title": "Selkies",
@@ -23,6 +23,8 @@
       "notSelkies": "The configured address did not report active Selkies WebSocket mode. Check the port and path.",
       "unreachable": "The Selkies container did not answer. Check the address, port and connection route.",
       "unauthorized": "The Selkies container refused the login. Check the username and password.",
+      "tokenRequired": "The Selkies server is in secure mode and wants a valid access token. Check the access token in the host's Selkies login.",
+      "websocketModeInactive": "The Selkies server is in WebRTC mode, which can't go through Termix. Switch it to WebSocket mode.",
       "forbidden": "You may not connect to this host.",
       "tooManySessions": "Too many Selkies desktops are open on this server. Close one and try again."
     },
@@ -30,27 +32,29 @@
   },
   "hosts": {
     "title": "Selkies",
-    "description": "Remote desktop from a linuxserver Selkies container, such as webtop.",
+    "description": "Remote desktop from a Selkies server, such as linuxserver's webtop or Selkies' own images.",
     "login": "Login",
     "scheme": "Protocol",
-    "schemeHelp": "The linuxserver images serve HTTPS on 3001 and plain HTTP on 3000.",
+    "schemeHelp": "The linuxserver images serve HTTPS on 3001 and plain HTTP on 3000. Selkies' own server uses 8080.",
     "port": "Port",
     "path": "Path",
-    "pathHelp": "The container's SUBFOLDER, like /desktop/. Leave / when it has none.",
+    "pathHelp": "The path Selkies is served under, like /desktop/ (the container's SUBFOLDER). Leave / when it has none.",
     "route": "Reach the container",
     "routeDirect": "Directly from the Termix server",
     "routeSsh": "Through this host's SSH connection",
     "routeHelp": "Through SSH the container can stay bound to 127.0.0.1 on the host.",
     "ignoreCert": "Accept a self-signed certificate",
-    "ignoreCertHelp": "The linuxserver images make their own certificate.",
+    "ignoreCertHelp": "The linuxserver images and Selkies' own server make their own certificate.",
     "openInBrowser": "Open in browser",
     "openInBrowserHelp": "Adds a button to the tab that opens the container's own page in a new browser tab. Use it for the microphone, gamepads and fullscreen, which the Termix tab can't offer. That page doesn't go through Termix: your browser connects to the container itself, so it only works where your browser can reach it, like on the same network or over a VPN. Sign in there with the container's login.",
     "publicUrl": "Address for Open in browser",
     "publicUrlHelp": "Leave empty to use this host's address with the protocol, port and path above. Set it when your browser reaches the container under another address, like a reverse proxy or a VPN name.",
     "username": "Username",
-    "usernameHelp": "The container's CUSTOM_USER. Usually abc.",
+    "usernameHelp": "The container's CUSTOM_USER: abc on linuxserver images (used when empty), ubuntu on Selkies' own.",
     "password": "Password",
-    "passwordHelp": "The container's PASSWORD. Leave empty when it has none.",
+    "passwordHelp": "The container's PASSWORD (or PASSWD). Leave empty when it has no login.",
+    "token": "Access token",
+    "tokenHelp": "Only for a Selkies server in secure mode (SELKIES_MASTER_TOKEN set): a session token from its token table, not the master token. Termix adds it on the server; the browser never sees it.",
     "passwordSaved": "Saved, type to change",
     "authMethod": "Login from",
     "authDirect": "Typed here",

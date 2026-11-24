@@ -75,6 +75,7 @@ export function localUpstream(
   port: number,
   path = "/",
   authorization: string | null = "Basic YWJjOnNlY3JldA==",
+  token: string | null = null,
 ): Upstream & { closed: () => boolean } {
   let closed = false;
   return {
@@ -83,6 +84,7 @@ export function localUpstream(
     hostHeader: `127.0.0.1:${port}`,
     origin: `http://127.0.0.1:${port}`,
     authorization,
+    token,
     connect: () =>
       new Promise((resolve, reject) => {
         const socket = net.connect({ host: "127.0.0.1", port });

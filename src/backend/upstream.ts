@@ -16,6 +16,11 @@ export interface Upstream {
   origin: string;
   /** "Basic ..." for the container's login, or null when it has none. */
   authorization: string | null;
+  /**
+   * The Selkies session token for a server in secure mode, or null. It goes
+   * on the container's api/ requests as ?token= and never to the browser.
+   */
+  token: string | null;
   /** A new connection, TLS already set up for https. */
   connect: () => Promise<Duplex>;
   close: () => void;
@@ -29,11 +34,16 @@ export interface UpstreamTarget {
   ignoreCert: boolean;
   username: string;
   password: string;
+  /** The Selkies session token, or "" when the server has none. */
+  token: string;
 }
 
 const CONNECT_TIMEOUT_MS = 15_000;
 
-/** The Basic login linuxserver's nginx asks for, or null without a password. */
+/**
+ * The Basic login Selkies asks for, or null without a password. An empty
+ * username falls back to linuxserver's default CUSTOM_USER.
+ */
 export function basicAuthorization(
   username: string,
   password: string,
@@ -80,7 +90,57 @@ function common(target: UpstreamTarget) {
     hostHeader: authority,
     origin: `${target.scheme}://${authority}`,
     authorization: basicAuthorization(target.username, target.password),
+    token: sessionToken(target.token),
   };
+}
+
+/**
+ * A token as Selkies accepts one, or null: printable, without spaces, as
+ * tokens.json or POST /api/tokens hands them out.
+ */
+export function sessionToken(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const token = value.trim();
+  return token && token.length <= 4096 && /^[\x21-\x7e]+$/.test(token)
+    ? token
+    : null;
+}
+
+/** Query pairs of `search` ("a=b&c", with or without "?") minus any `token`. */
+function withoutToken(search: string): string[] {
+  return search
+    .replace(/^\?/, "")
+    .split("&")
+    .filter((pair) => {
+      if (!pair) return false;
+      const key = pair.split("=", 1)[0]!.replace(/\+/g, " ");
+      try {
+        return decodeURIComponent(key) !== "token";
+      } catch {
+        return true;
+      }
+    });
+}
+
+/**
+ * A container path ("api/websockets?x=1") with the session token as its
+ * ?token=, replacing any the client sent. Paths outside api/ are unchanged:
+ * Selkies only reads the token there, and static files have no use for it.
+ * Every other query pair stays exactly as written.
+ */
+export function withSessionToken(path: string, token: string | null): string {
+  if (!token || !/^api\//.test(path)) return path;
+  const mark = path.indexOf("?");
+  const bare = mark < 0 ? path : path.slice(0, mark);
+  const pairs = withoutToken(mark < 0 ? "" : path.slice(mark + 1));
+  pairs.push(`token=${encodeURIComponent(token)}`);
+  return `${bare}?${pairs.join("&")}`;
+}
+
+/** A query ("?a=b" or "") without its token, for addresses the browser sees. */
+export function stripSessionToken(search: string): string {
+  const pairs = withoutToken(search);
+  return pairs.length ? `?${pairs.join("&")}` : "";
 }
 
 /**

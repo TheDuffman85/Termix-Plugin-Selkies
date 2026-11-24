@@ -2,7 +2,12 @@ import { PassThrough } from "node:stream";
 import tls from "node:tls";
 import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import { afterEach, expect, it, vi } from "vitest";
-import { createSshUpstream } from "../../src/backend/upstream.js";
+import {
+  createSshUpstream,
+  sessionToken,
+  stripSessionToken,
+  withSessionToken,
+} from "../../src/backend/upstream.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -37,6 +42,7 @@ it.each([
       ignoreCert: false,
       username: "",
       password: "",
+      token: "",
     });
 
     expect(await upstream.connect()).toBe(secure);
@@ -69,3 +75,32 @@ it.each([
     expect(dispose).toHaveBeenCalledOnce();
   },
 );
+
+it("adds the session token to api/ paths only, replacing the client's", () => {
+  expect(withSessionToken("api/websockets", "t0k")).toBe(
+    "api/websockets?token=t0k",
+  );
+  expect(withSessionToken("api/files/a?x=%20&token=mine&y", "a+b")).toBe(
+    "api/files/a?x=%20&y&token=a%2Bb",
+  );
+  expect(withSessionToken("index.html?token=mine", "t0k")).toBe(
+    "index.html?token=mine",
+  );
+  expect(withSessionToken("api/websockets?token=mine", null)).toBe(
+    "api/websockets?token=mine",
+  );
+});
+
+it("keeps the session token out of addresses the browser sees", () => {
+  expect(stripSessionToken("?a=1&token=t0k&b")).toBe("?a=1&b");
+  expect(stripSessionToken("?token=t0k")).toBe("");
+  expect(stripSessionToken("")).toBe("");
+});
+
+it("accepts only printable tokens without spaces", () => {
+  expect(sessionToken("  abc-123_XYZ  ")).toBe("abc-123_XYZ");
+  expect(sessionToken("")).toBeNull();
+  expect(sessionToken("has space")).toBeNull();
+  expect(sessionToken("line\nbreak")).toBeNull();
+  expect(sessionToken(undefined)).toBeNull();
+});

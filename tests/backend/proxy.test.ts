@@ -148,6 +148,16 @@ describe("headers", () => {
       "https://elsewhere.example/",
     );
   });
+
+  it("keeps the session token out of redirects", () => {
+    const sub = localUpstream(3000, "/desk/", null, "t0k");
+    expect(
+      rewriteLocation("/desk/api/files/?token=t0k&sort=name#top", sub, "/"),
+    ).toBe("api/files/?sort=name#top");
+    expect(rewriteLocation("/desk/api/files/?token=t0k", sub, "/")).toBe(
+      "api/files/",
+    );
+  });
 });
 
 describe("injectShim", () => {
@@ -240,9 +250,13 @@ describe("forward", () => {
       res.end();
     });
     const upstream = localUpstream(selkies.port, "/desk/");
+    const secure = localUpstream(selkies.port, "/desk/", null, "t0k");
     const app = express();
     app.use("/s/tok", (req, res) => {
       void forward(req, res, upstream, req.url);
+    });
+    app.use("/s/secure", (req, res) => {
+      void forward(req, res, secure, req.url);
     });
     server = http.createServer(app);
     await new Promise<void>((resolve) =>
@@ -277,6 +291,17 @@ describe("forward", () => {
     );
     expect(selkies.seen[0].headers.host).toBe(`127.0.0.1:${selkies.port}`);
     expect(selkies.seen[0].headers["accept-encoding"]).toBeUndefined();
+  });
+
+  it("adds the session token to api/ requests only", async () => {
+    const root = base.replace(/\/tok$/, "/secure");
+    await fetch(`${root}/api/upload?token=mine&x=1`, { method: "POST" });
+    await fetch(`${root}/app.js?token=mine`);
+    expect(selkies.seen.map((request) => request.url)).toEqual([
+      "/desk/api/upload?x=1&token=t0k",
+      "/desk/app.js?token=mine",
+    ]);
+    expect(selkies.seen[0].headers.authorization).toBeUndefined();
   });
 
   it("streams other files as they are", async () => {

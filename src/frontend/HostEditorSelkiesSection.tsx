@@ -125,6 +125,24 @@ export function patchLogin(
   };
 }
 
+/** A form patch that sets one of the login's declared fields, like the token. */
+export function patchLoginField(
+  current: Record<string, unknown>,
+  key: string,
+  value: string,
+): Record<string, unknown> {
+  const logins = (current.protocolAuth as Logins | undefined) ?? {};
+  const login = logins[PLUGIN_ID]
+    ? { ...EMPTY_LOGIN, ...logins[PLUGIN_ID] }
+    : EMPTY_LOGIN;
+  return {
+    protocolAuth: {
+      ...logins,
+      [PLUGIN_ID]: { ...login, fields: { ...login.fields, [key]: value } },
+    },
+  };
+}
+
 /**
  * Whether the editor holds Selkies settings that differ from the saved host.
  * Test connection uses the saved ones. The login isn't compared: a saved
@@ -261,6 +279,10 @@ export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
     props.host,
   );
   const passwordKept = form.login.password === HOST_PROTOCOL_SECRET_KEPT;
+  const token = form.login.fields?.token ?? "";
+  const tokenKept = token === HOST_PROTOCOL_SECRET_KEPT;
+  const setToken = (value: string) =>
+    props.updateForm((current) => patchLoginField(current, "token", value));
   const useCredential =
     form.login.authType === "credential" && credentials.length > 0;
 
@@ -490,6 +512,20 @@ export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
                 />
               </Field>
             </div>
+          )}
+          {(advanced || token !== "") && (
+            <Field label={t("hosts.token")} help={t("hosts.tokenHelp")}>
+              <PasswordInput
+                className="h-8 pr-8 text-xs"
+                aria-label={t("hosts.token")}
+                placeholder={tokenKept ? t("hosts.passwordSaved") : ""}
+                value={tokenKept ? "" : token}
+                onFocus={() => {
+                  if (tokenKept) setToken("");
+                }}
+                onChange={(event) => setToken(event.target.value)}
+              />
+            </Field>
           )}
           <div className="flex flex-wrap items-center gap-3">
             <Button

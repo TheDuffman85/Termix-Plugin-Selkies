@@ -1,16 +1,16 @@
 # Termix Plugin: Selkies
 
 A [Termix](https://github.com/Termix-SSH/Termix) plugin that opens [Selkies](https://docs.selkies.io/)
-remote desktops in a Termix tab. It works with any Selkies server in WebSocket mode that serves its web
-client and stream the way
-[linuxserver/docker-baseimage-selkies](https://github.com/linuxserver/docker-baseimage-selkies) does: every
-image built on that base, such as [webtop](https://docs.linuxserver.io/images/docker-webtop/), and other
-servers with the same layout.
+remote desktops in a Termix tab. It works with Selkies servers in WebSocket mode: every image built on
+[linuxserver/docker-baseimage-selkies](https://github.com/linuxserver/docker-baseimage-selkies), such as
+[webtop](https://docs.linuxserver.io/images/docker-webtop/), [Selkies' own](https://github.com/selkies-project/selkies)
+server and images, and other servers with the same layout. Its defaults match the linuxserver images.
 
 - Video, desktop audio, keyboard, mouse, clipboard and file transfer in the tab
 - Reaches the container directly from the Termix server, or through the host's SSH connection, so the
   container can stay bound to `127.0.0.1`
-- The container's login stays in Termix and is added on the server; the browser never sees it
+- The container's login stays in Termix and is added on the server; the browser never sees it. That
+  includes a Selkies access token for servers in secure mode
 - **Open in browser** for the microphone, gamepads and fullscreen, which Termix doesn't allow inside plugin
   tabs. Off by default; turn it on per host
 - Works from the Termix mobile app too, which opens the desktop in the phone's browser
@@ -21,8 +21,8 @@ See [docs/index.md](docs/index.md) for setup and recommended container settings.
 ## Requirements
 
 - Termix 26.11.2 or newer with Plugin API 2.7 or newer in the 2.x series
-- A Selkies server in WebSocket mode (the linuxserver default) that serves its web client at its base path and
-  the stream at `api/websockets` below it, with no login or HTTP Basic login. See
+- A Selkies server in WebSocket mode (the default) that serves its web client at its base path and the
+  stream at `api/websockets` below it, with no login, an HTTP Basic login or an access token. See
   [docs/index.md](docs/index.md#requirements) for details
 
 ## Install

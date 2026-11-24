@@ -5,7 +5,9 @@
 ### Added
 
 - Optional per-host Docker startup over SSH and shutdown after a configurable idle time with no connected desktops
-- Selkies desktops in WebSocket mode (webtop and other docker-baseimage-selkies images) in a Termix tab, with desktop audio
+- Selkies desktops in WebSocket mode (webtop and other docker-baseimage-selkies images, or Selkies' own server and images) in a Termix tab, with desktop audio
+- An optional access token for Selkies servers in secure mode, added on the server and never sent to the browser
+- Test connection and the tab explain a server in WebRTC mode, or one in secure mode without a valid token
 - Reaches the container directly or through the host's SSH connection
 - The container's login is kept by Termix and added on the server, never sent to the browser
 - Open in browser, for microphone, gamepads and fullscreen, turned on per host (off by default)

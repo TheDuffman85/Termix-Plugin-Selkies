@@ -2,7 +2,7 @@
   "id": "selkies",
   "name": "Selkies",
   "version": "0.1.0",
-  "description": "Selkies remote desktops in WebSocket mode, such as linuxserver's webtop and other docker-baseimage-selkies images, in a Termix tab, with sound.",
+  "description": "Selkies remote desktops in WebSocket mode, such as linuxserver's webtop, other docker-baseimage-selkies images or Selkies' own server, in a Termix tab, with sound.",
   "author": {
     "name": "TheDuffman85"
   },
@@ -12,7 +12,8 @@
   "category": "Terminal",
   "icon": "MonitorPlay",
   "features": [
-    "Selkies desktops in WebSocket mode (webtop, any docker-baseimage-selkies image, or a server with the same layout) in a Termix tab",
+    "Selkies desktops in WebSocket mode (webtop, any docker-baseimage-selkies image, or Selkies' own server and images) in a Termix tab",
+    "Basic login, no login, or a Selkies access token for servers in secure mode",
     "Desktop audio, keyboard, mouse, clipboard and file transfer through Termix",
     "Reaches the container directly or through the host's SSH connection",
     "The container's login stays on the server and never reaches the browser",
@@ -47,6 +48,7 @@
     "protocols": [
       {
         "id": "selkies",
+        "credentialFields": [{ "key": "token", "secret": true }],
         "defaultPort": 3001,
         "hostLoginFallback": []
       }

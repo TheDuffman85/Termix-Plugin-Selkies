@@ -134,6 +134,26 @@ describe("socket proxy", () => {
     await closed;
   });
 
+  it("presents the session token on the handshake, replacing the client's", async () => {
+    const session = sessions.mint({
+      userId: "u1",
+      hostId: 1,
+      upstream: localUpstream(
+        selkies.port,
+        "/desk/",
+        "Basic YWJjOnNlY3JldA==",
+        "t0k",
+      ),
+    });
+    const { ws } = await open(
+      `${base}?t=${session.token}&p=websockets&token=mine&role=viewer`,
+    );
+    expect(selkies.upgrades[0].url).toBe(
+      "/desk/api/websockets?role=viewer&token=t0k",
+    );
+    ws.close();
+  });
+
   it("refuses an unknown session", async () => {
     await expect(open(`${base}?t=${TOKEN}&p=websockets`)).rejects.toThrow(
       /404/,
