@@ -24,6 +24,8 @@ interface ManagedContainer {
   idleMs: number;
   idleSince: number;
   busy: number;
+  /** After a failure, the sweep leaves the entry alone until then. */
+  retryAt?: number;
   starting?: Promise<void>;
   stopping?: Promise<void>;
 }
@@ -80,6 +82,8 @@ export function createContainerManager(
 
   function hold(entry: ManagedContainer): () => void {
     entry.busy++;
+    // New use starts a fresh idle period, without an old failure's backoff.
+    entry.retryAt = undefined;
     let released = false;
     return () => {
       if (released) return;
@@ -198,9 +202,6 @@ export function createContainerManager(
           busy: 0,
         };
         remember(entry);
-      } else if (entry.userId !== userId) {
-        entry.userId = userId;
-        remember(entry);
       }
       entry.idleMs = settings.idleMinutes * 60_000;
       const release = hold(entry);
@@ -208,13 +209,26 @@ export function createContainerManager(
         // A reconnect during stop waits, then starts again. Commands never race.
         await entry.stopping;
         if (disposed) throw new Error("Selkies is shutting down");
+        let ownStart = false;
         if (!entry.starting) {
           const current = entry;
+          ownStart = true;
           entry.starting = command(entry, "start").finally(() => {
             current.starting = undefined;
           });
         }
         await entry.starting;
+        // Idle shutdown runs as the last user whose own start succeeded. A
+        // failed attempt (say, SSH refused for this user) keeps the previous
+        // one, and joining someone else's start proves nothing about access.
+        if (
+          ownStart &&
+          entry.userId !== userId &&
+          containers.get(hostId) === entry
+        ) {
+          entry.userId = userId;
+          remember(entry);
+        }
         return release;
       } catch (error) {
         release();
@@ -235,9 +249,12 @@ export function createContainerManager(
         [...containers.values()].map(async (entry) => {
           if (disposed || entry.busy || entry.starting || entry.stopping)
             return;
-          // Reading settings must not briefly refuse traffic on every sweep.
-          await ctx.asUser(entry.userId, async () => {
-            try {
+          if (entry.retryAt !== undefined && now() < entry.retryAt) return;
+          // asUser itself can fail too (the user was deleted, say), so the
+          // whole check sits inside the try.
+          try {
+            // Reading settings must not briefly refuse traffic on every sweep.
+            await ctx.asUser(entry.userId, async () => {
               const settings = await readHostSettings(ctx, entry.hostId);
               if (
                 disposed ||
@@ -278,14 +295,17 @@ export function createContainerManager(
                   entry.stopping = undefined;
                 });
               await entry.stopping;
-            } catch (error) {
-              // Keep tracking failed stops and retry after another idle interval.
-              entry.idleSince = now();
-              ctx.log.warn(
-                `Could not stop Selkies container on host ${entry.hostId}: ${String(error)}`,
-              );
-            }
-          });
+            });
+            entry.retryAt = undefined;
+          } catch (error) {
+            // Keep tracking failed stops and retry after another idle interval,
+            // rather than on every sweep.
+            entry.idleSince = now();
+            entry.retryAt = now() + entry.idleMs;
+            ctx.log.warn(
+              `Could not stop Selkies container on host ${entry.hostId}: ${String(error)}`,
+            );
+          }
         }),
       );
     },

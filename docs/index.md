@@ -37,6 +37,12 @@ uses the linuxserver names.
 Test connection uses the container's HTTP readiness probe to check that WebSocket mode is active.
 Open the desktop from the host's connect button, its context menu or the command palette.
 
+**Accept a self-signed certificate** is on by default, because the linuxserver images make their own
+certificate. With it on, Termix doesn't check who answers, and it sends the container's login to that
+server. On the Direct route, anyone who can intercept traffic between the Termix server and the container
+could read that login. Use the SSH route, or give the container a real certificate and turn the setting
+off, when that network isn't trusted.
+
 For HTTPS through SSH with certificate verification enabled, the certificate must match the saved host
 address. The SSH forward still connects to the container on the host's loopback interface.
 
@@ -126,7 +132,9 @@ hosts in the web or desktop app, since the mobile app has no host editor for plu
 The Termix server proxies the container's web client and its stream, and adds the container's
 login on the way, so the password never reaches the browser. Each opened tab gets its own
 random session link. It ends when the tab closes, after 10 minutes without use, or at most
-after 12 hours. Termix's own login never reaches the container: the desktop page always runs
+after 12 hours. Each user can have up to 20 desktops open; opening another ends their oldest. If the
+server's limit of 500 is reached, a new desktop only replaces one with no open stream, and is
+refused when every desktop is in use. Termix's own login never reaches the container: the desktop page always runs
 sandboxed, even opened on its own.
 
 Termix rechecks the user who opened the desktop. A new WebSocket connection gets a fresh check.

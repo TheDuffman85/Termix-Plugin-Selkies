@@ -8,7 +8,7 @@ import {
   type SelkiesHostSettings,
 } from "./host-settings.js";
 import { forward, PAGE_CSP, upstreamRequest } from "./proxy.js";
-import { isToken, type SessionStore } from "./sessions.js";
+import { isToken, SessionLimitError, type SessionStore } from "./sessions.js";
 import {
   createDirectUpstream,
   createSshUpstream,
@@ -56,6 +56,21 @@ function accessRefusal(error: unknown): Record<string, unknown> | null {
   }
   if (typeof failure.toJSON === "function") return failure.toJSON();
   return { error: String(failure.message ?? ""), code: failure.code };
+}
+
+/**
+ * True once the browser has dropped the request, before an answer was sent.
+ *
+ * `req.destroyed` alone is no signal: Node also destroys a request whose body
+ * was read to the end (as the JSON body parser does). Only a response closed
+ * before it finished, or a request closed before its body arrived, is a drop.
+ */
+function clientGone(req: Request, res: Response): () => boolean {
+  let gone = false;
+  res.once("close", () => {
+    if (!res.writableFinished) gone = true;
+  });
+  return () => gone || (req.destroyed && !req.complete);
 }
 
 function message(error: unknown): string {
@@ -185,6 +200,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
   async function prepare(
     req: Request,
     res: Response,
+    gone: () => boolean = () => false,
   ): Promise<{
     hostId: number;
     name: string;
@@ -265,6 +281,8 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       const deadline = Date.now() + (settings.manageContainer ? 60_000 : 0);
       let status: number;
       for (;;) {
+        // Nobody waits for the answer any more: stop probing.
+        if (gone()) throw new Error("The request was cancelled");
         try {
           ({ status } = await probeUpstream(
             upstream,
@@ -337,7 +355,9 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
    *       502:
    *         description: The container could not be reached
    *       503:
-   *         description: Selkies is turned off on this server
+   *         description: >
+   *           Selkies is turned off on this server, or every desktop slot holds
+   *           a live desktop
    */
   router.post(
     "/launch/:hostId",
@@ -353,7 +373,8 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
         });
         return;
       }
-      const prepared = await prepare(req, res);
+      const gone = clientGone(req, res);
+      const prepared = await prepare(req, res, gone);
       if (!prepared) return;
       try {
         if (!(await enabled())) {
@@ -361,11 +382,25 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
           fail(res, disabled);
           return;
         }
-        const session = sessions.mint({
-          userId,
-          hostId: prepared.hostId,
-          upstream: prepared.upstream,
-        });
+        // The browser gave up while the container started: no one would ever
+        // load this session, and it would hold its connection until it idles out.
+        if (gone()) {
+          prepared.upstream.close();
+          return;
+        }
+        let session;
+        try {
+          session = sessions.mint({
+            userId,
+            hostId: prepared.hostId,
+            upstream: prepared.upstream,
+          });
+        } catch (error) {
+          prepared.upstream.close();
+          if (!(error instanceof SessionLimitError)) throw error;
+          fail(res, { status: 503, code: error.code, error: error.message });
+          return;
+        }
         ctx.audit.record({
           action: "selkies_connect",
           resourceType: "host",
@@ -414,7 +449,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
     requireConnect,
     json,
     async (req: Request, res: Response) => {
-      const prepared = await prepare(req, res);
+      const prepared = await prepare(req, res, clientGone(req, res));
       if (!prepared) return;
       prepared.upstream.close();
       prepared.release();

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   renderWithApp,
   type RenderedPluginApp,
@@ -249,5 +249,112 @@ describe(`${manifest.id} frontend`, () => {
         selkiesIdleMinutes: 20,
       },
     });
+  });
+
+  it("saves only whole numbers in range from the number fields", async () => {
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    let form: Record<string, unknown> = {
+      pluginSettings: {
+        selkies: { selkiesPort: 3001, selkiesManageContainer: true },
+      },
+    };
+    rendered.renderHostEditorSection("selkies", {
+      form,
+      setField: vi.fn(),
+      updateForm: (
+        patch: (f: Record<string, unknown>) => Record<string, unknown>,
+      ) => {
+        form = { ...form, ...patch(form) };
+      },
+      protocols: { enableSelkies: true },
+      advanced: true,
+    });
+    const port = screen.getByLabelText(locales.hosts.port) as HTMLInputElement;
+    const idle = screen.getByLabelText(
+      locales.hosts.idleMinutes,
+    ) as HTMLInputElement;
+    for (const value of ["", "0", "70000", "1.5"]) {
+      fireEvent.change(port, { target: { value } });
+    }
+    for (const value of ["", "0", "1441"]) {
+      fireEvent.change(idle, { target: { value } });
+    }
+    expect(form.pluginSettings).toEqual({
+      selkies: { selkiesPort: 3001, selkiesManageContainer: true },
+    });
+    // Leaving the field shows the saved number again.
+    fireEvent.blur(port);
+    expect(port.value).toBe("3001");
+  });
+
+  it("notes that Test connection uses the saved settings", async () => {
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    const props = {
+      setField: vi.fn(),
+      updateForm: vi.fn(),
+      protocols: { enableSelkies: true },
+      advanced: true,
+    };
+    const saved = { selkies: { enableSelkies: true, selkiesPort: 3001 } };
+    rendered.renderHostEditorSection("selkies", {
+      ...props,
+      host: { ...host, pluginSettings: saved } as never,
+      form: { pluginSettings: saved },
+    });
+    expect(screen.queryByText(locales.hosts.testUnsaved)).toBeNull();
+    await rendered.deactivate();
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    rendered.renderHostEditorSection("selkies", {
+      ...props,
+      host: { ...host, pluginSettings: saved } as never,
+      form: {
+        pluginSettings: { selkies: { enableSelkies: true, selkiesPort: 3000 } },
+      },
+    });
+    expect(screen.getByText(locales.hosts.testUnsaved)).toBeTruthy();
+  });
+
+  it("shows a full server as its own error", async () => {
+    const post = vi.fn().mockRejectedValue({
+      response: {
+        status: 503,
+        data: { code: "too-many-sessions", error: "full" },
+      },
+    });
+    rendered = await renderWithApp(plugin, {
+      manifest,
+      locales,
+      api: { post } as never,
+    });
+    rendered.renderTab("selkies", { host, isVisible: true });
+    expect(
+      await screen.findByText(locales.tab.errors.tooManySessions),
+    ).toBeTruthy();
+  });
+
+  it("shows a disconnect as a disconnect, not an error", async () => {
+    const post = vi.fn(async (url: string) =>
+      url === "/launch/7"
+        ? { data: { token: TOKEN, directUrl: null } }
+        : { data: { closed: true } },
+    );
+    rendered = await renderWithApp(plugin, {
+      manifest,
+      locales,
+      api: { post } as never,
+    });
+    const handle: { current: { disconnect: () => void } | null } = {
+      current: null,
+    };
+    rendered.renderTab("selkies", {
+      host,
+      isVisible: true,
+      handleRef: handle,
+    } as never);
+    await screen.findByTitle(locales.tab.title);
+    act(() => handle.current!.disconnect());
+    expect(await screen.findByText(locales.tab.disconnected)).toBeTruthy();
+    expect(screen.queryByText(locales.tab.errors.generic)).toBeNull();
+    expect(post).toHaveBeenCalledWith(`/sessions/${TOKEN}/close`, {});
   });
 });

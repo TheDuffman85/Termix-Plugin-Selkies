@@ -1,5 +1,5 @@
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
@@ -148,5 +148,35 @@ describe("socket proxy", () => {
       upstream: localUpstream(selkies.port, "/", "Basic d3Jvbmc="),
     });
     await expect(open(`${base}?t=${session.token}`)).rejects.toThrow(/401/);
+  });
+
+  it("gives up on a container that never answers the upgrade", async () => {
+    // Reads (so it sees the proxy hang up) but never answers.
+    const silent = net.createServer((connection) => connection.resume());
+    await new Promise<void>((resolve) =>
+      silent.listen(0, "127.0.0.1", resolve),
+    );
+    const quick = createSocketProxy(sessions, 50);
+    const quickServer = http.createServer();
+    quickServer.on("upgrade", (req, socket: Duplex, head: Buffer) => {
+      browserSockets.add(socket);
+      void quick(req, bridgeSocket(socket), head);
+    });
+    await new Promise<void>((resolve) =>
+      quickServer.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const session = sessions.mint({
+        userId: "u1",
+        hostId: 1,
+        upstream: localUpstream((silent.address() as AddressInfo).port),
+      });
+      const url = `ws://127.0.0.1:${(quickServer.address() as AddressInfo).port}/stream?t=${session.token}`;
+      await expect(open(url)).rejects.toThrow(/504/);
+    } finally {
+      quickServer.closeAllConnections?.();
+      await new Promise<void>((resolve) => quickServer.close(() => resolve()));
+      await new Promise<void>((resolve) => silent.close(() => resolve()));
+    }
   });
 });

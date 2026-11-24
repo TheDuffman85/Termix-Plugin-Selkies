@@ -101,8 +101,17 @@ async function start(
   base = `127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
-async function post(path: string) {
-  const response = await fetch(`http://${base}${path}`, { method: "POST" });
+async function post(path: string, json?: unknown) {
+  const response = await fetch(
+    `http://${base}${path}`,
+    json === undefined
+      ? { method: "POST" }
+      : {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(json),
+        },
+  );
   return {
     status: response.status,
     body: (await response.json()) as Record<string, unknown>,
@@ -448,6 +457,15 @@ describe("routes", () => {
     await mock.ctx.settings.set("enabled", false);
     expect((await fetch(`http://${base}/s/${body.token}/`)).status).toBe(404);
     expect((await post("/launch/1")).status).toBe(503);
+  });
+
+  it("launches and probes with a JSON body, as the frontend sends", async () => {
+    await start();
+    expect(await post("/probe/1", {})).toEqual({
+      status: 200,
+      body: { ok: true },
+    });
+    expect((await post("/launch/1", {})).status).toBe(200);
   });
 
   it("probes a host", async () => {

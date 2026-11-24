@@ -23,8 +23,10 @@
       "notSelkies": "The configured address did not report active Selkies WebSocket mode. Check the port and path.",
       "unreachable": "The Selkies container did not answer. Check the address, port and connection route.",
       "unauthorized": "The Selkies container refused the login. Check the username and password.",
-      "forbidden": "You may not connect to this host."
-    }
+      "forbidden": "You may not connect to this host.",
+      "tooManySessions": "Too many Selkies desktops are open on this server. Close one and try again."
+    },
+    "disconnected": "The desktop is disconnected."
   },
   "hosts": {
     "title": "Selkies",
@@ -58,6 +60,7 @@
     "test": "Test connection",
     "testing": "Testing…",
     "testSaveFirst": "Save the host first, then test. The test uses the saved settings.",
+    "testUnsaved": "Unsaved changes: the test uses the saved settings, so save first.",
     "testOk": "The container answered with the saved login.",
     "testFailed": "Test failed: {{error}}",
     "manageContainer": "Start and stop Docker automatically",

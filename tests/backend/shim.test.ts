@@ -64,8 +64,19 @@ function fakeWindow(href = PAGE) {
     }
   }
 
+  type Listener = (event: Record<string, unknown>) => void;
+  const listeners: Array<{ type: string; listener: Listener }> = [];
+  const deliver = (data: unknown, origin: string, source: unknown) => {
+    const event = { type: "message", data, origin, source };
+    for (const entry of listeners.slice()) {
+      if (entry.type === "message") entry.listener(event);
+    }
+  };
+
   const win: Record<string, unknown> = {
+    origin: "null",
     location: {
+      origin: url.origin,
       pathname: url.pathname,
       host: url.host,
       protocol: url.protocol,
@@ -84,8 +95,24 @@ function fakeWindow(href = PAGE) {
     btoa: (s: string) => Buffer.from(s, "binary").toString("base64"),
     unescape,
     encodeURIComponent,
-    postMessage(message: unknown, target: unknown) {
+    WeakMap,
+    postMessage(this: unknown, message: unknown, target: unknown) {
       posted.push({ message, target });
+      const to =
+        target && typeof target === "object"
+          ? (target as { targetOrigin?: unknown }).targetOrigin
+          : target;
+      // A browser delivers only what the opaque origin matches.
+      if (to === "*") deliver(message, "null", this);
+    },
+    addEventListener(type: string, listener: Listener) {
+      listeners.push({ type, listener });
+    },
+    removeEventListener(type: string, listener: Listener) {
+      const at = listeners.findIndex(
+        (entry) => entry.type === type && entry.listener === listener,
+      );
+      if (at >= 0) listeners.splice(at, 1);
     },
   };
   Object.defineProperty(win, "localStorage", {
@@ -117,6 +144,8 @@ function fakeWindow(href = PAGE) {
     context,
     opened,
     posted,
+    deliver,
+    listeners,
     workers,
     blobs,
     xhrCalls,
@@ -219,6 +248,56 @@ describe("shim", () => {
       "https://x.example",
       { targetOrigin: "*" },
     ]);
+  });
+
+  it("delivers the client's messages to itself at the page origin", () => {
+    const { context, posted } = fakeWindow();
+    const received = vm.runInContext(
+      `var got = [];
+       window.addEventListener("message", function (e) {
+         if (e.origin !== window.location.origin) return;
+         got.push(e.data);
+       });
+       window.onmessage = function (e) { got.push("on:" + e.origin); };
+       window.postMessage("hello", window.location.origin);
+       window.postMessage("opts", { targetOrigin: window.location.origin });
+       got`,
+      context,
+    );
+    expect(posted.map((entry) => entry.target)).toEqual([
+      "*",
+      { targetOrigin: "*" },
+    ]);
+    expect(received).toEqual([
+      "hello",
+      "on:https://termix.example",
+      "opts",
+      "on:https://termix.example",
+    ]);
+  });
+
+  it("keeps the real origin of messages from other frames", () => {
+    const { context, deliver } = fakeWindow();
+    const received = vm.runInContext(
+      `var got = []; window.addEventListener("message", function (e) { got.push(e.origin); }); got`,
+      context,
+    );
+    deliver("x", "null", { other: true });
+    deliver("y", "https://evil.example", { other: true });
+    expect(received).toEqual(["null", "https://evil.example"]);
+  });
+
+  it("removes a message listener it wrapped", () => {
+    const { context, listeners } = fakeWindow();
+    vm.runInContext(
+      `function f() {}
+       window.addEventListener("message", f);
+       window.removeEventListener("message", f);
+       window.onmessage = function () {};
+       window.onmessage = null;`,
+      context,
+    );
+    expect(listeners).toHaveLength(0);
   });
 
   it("moves upload headers into the query and drops credentials", () => {

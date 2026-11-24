@@ -187,6 +187,57 @@ describe("Docker lifecycle", () => {
     expect(exec).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps the previous user in charge after another user's start fails", async () => {
+    (await manager.acquire(1, "alice", settings))();
+    exec.mockResolvedValueOnce({
+      ...success,
+      code: 1,
+      stderr: "permission denied",
+    });
+    await expect(manager.acquire(1, "bob", settings)).rejects.toThrow(
+      "permission denied",
+    );
+    expect(await mock.ctx.kv.get("container:1")).toMatchObject({
+      userId: "alice",
+    });
+    const actors: Array<string | undefined> = [];
+    vi.spyOn(mock.ctx.rbac, "has").mockImplementation(async () => {
+      actors.push(mock.ctx.currentActor());
+      return true;
+    });
+    time = 60_000;
+    await manager.sweep();
+    expect(actors).toEqual(["alice"]);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container stop --time 30 'webtop'",
+      expect.anything(),
+    );
+  });
+
+  it("hands idle shutdown to a user only once their own start succeeds", async () => {
+    let finishStart!: (value: typeof success) => void;
+    exec.mockImplementationOnce(
+      () => new Promise((resolve) => (finishStart = resolve)),
+    );
+    const alice = manager.acquire(1, "alice", settings);
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    // Bob joins Alice's start: that says nothing about Bob's own access.
+    const bob = manager.acquire(1, "bob", settings);
+    finishStart(success);
+    (await alice)();
+    (await bob)();
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(await mock.ctx.kv.get("container:1")).toMatchObject({
+      userId: "alice",
+    });
+    // Bob's own start succeeds: Bob is now in charge.
+    (await manager.acquire(1, "bob", settings))();
+    expect(await mock.ctx.kv.get("container:1")).toMatchObject({
+      userId: "bob",
+    });
+  });
+
   it("retries failed stops without losing management", async () => {
     (await manager.acquire(1, "user-1", settings))();
     exec.mockResolvedValueOnce({ ...success, code: null, timedOut: true });
@@ -198,6 +249,31 @@ describe("Docker lifecycle", () => {
     time += 60_000;
     await manager.sweep();
     expect(exec).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries after the idle interval when the user can't be acted as", async () => {
+    (await manager.acquire(1, "user-1", settings))();
+    const asUser = vi
+      .spyOn(mock.ctx, "asUser")
+      .mockRejectedValue(new Error("unknown user"));
+    const warn = vi.spyOn(mock.ctx.log, "warn");
+    time = 60_000;
+    await expect(manager.sweep()).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Not again on every sweep.
+    time += 15_000;
+    await manager.sweep();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(asUser).toHaveBeenCalledTimes(1);
+    // Once the user can be acted as again, the stop goes ahead.
+    asUser.mockRestore();
+    time += 45_000;
+    await manager.sweep();
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container stop --time 30 'webtop'",
+      expect.anything(),
+    );
   });
 
   it("honors changed idle settings and turning management off", async () => {

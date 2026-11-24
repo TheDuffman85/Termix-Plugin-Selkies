@@ -41,6 +41,19 @@ describe("checkPath", () => {
     expect(checkPath("/devmode")).toBeNull();
     expect(checkPath("/%zz")).toBeNull();
   });
+
+  it("refuses operator routes under another spelling", () => {
+    // nginx decodes %2F and merges slashes before it routes.
+    expect(checkPath("/%2Fapi/tokens")).toBeNull();
+    expect(checkPath("/api/%2Ftokens")).toBeNull();
+    expect(checkPath("/api%2Ftokens")).toBeNull();
+    expect(checkPath("/api%2ftokens")).toBeNull();
+    expect(checkPath("/a%5Cb")).toBeNull();
+    expect(checkPath("/API/Tokens")).toBeNull();
+    expect(checkPath("/Pelorus/")).toBeNull();
+    // A trailing slash is still fine.
+    expect(checkPath("/assets/")).toBe("assets/");
+  });
 });
 
 describe("headers", () => {
@@ -97,6 +110,31 @@ describe("headers", () => {
       takeMovedHeaders(new URLSearchParams(`${MOVED_HEADERS_PARAM}=@@@`))
         .headers,
     ).toEqual({});
+  });
+
+  it("leaves a query without moved headers exactly as written", () => {
+    expect(takeMovedHeaders("file=a%20b&flag&x=1?y").search).toBe(
+      "?file=a%20b&flag&x=1?y",
+    );
+    expect(takeMovedHeaders("").search).toBe("");
+    const moved = Buffer.from(
+      JSON.stringify({ "x-upload-path": "/c" }),
+    ).toString("base64");
+    expect(
+      takeMovedHeaders(
+        `a=1&${MOVED_HEADERS_PARAM}=${encodeURIComponent(moved)}`,
+      ),
+    ).toEqual({ headers: { "x-upload-path": "/c" }, search: "?a=1" });
+  });
+
+  it("asks only for encodings the HTML rewrite can read", () => {
+    const send = (value: string) =>
+      upstreamRequestHeaders({ "accept-encoding": value }, upstream)[
+        "accept-encoding"
+      ];
+    expect(send("gzip, deflate, br, zstd")).toBe("gzip, deflate, br");
+    expect(send("zstd;q=1, br;q=0.5, *")).toBe("br;q=0.5");
+    expect(send("zstd")).toBeUndefined();
   });
 
   it("keeps redirects inside the session", () => {
@@ -157,9 +195,20 @@ describe("forward", () => {
         res.end(html);
         return;
       }
-      if (req.url === "/desk/app.js") {
-        res.writeHead(200, { "content-type": "text/javascript" });
+      if (req.url?.startsWith("/desk/app.js")) {
+        res.writeHead(200, {
+          "content-type": "text/javascript",
+          "content-length": "14",
+        });
         res.end("console.log(1)");
+        return;
+      }
+      if (req.url === "/desk/odd.html") {
+        res.writeHead(200, {
+          "content-type": "text/html",
+          "content-encoding": "zstd",
+        });
+        res.end("not readable");
         return;
       }
       if (req.url === "/desk/large.html") {
@@ -174,6 +223,12 @@ describe("forward", () => {
       if (req.url === "/desk/locked") {
         res.writeHead(401, { "www-authenticate": 'Basic realm="x"' });
         res.end();
+        return;
+      }
+      if (req.url === "/desk/cut.bin") {
+        res.writeHead(200, { "content-type": "application/octet-stream" });
+        res.write("partial");
+        setTimeout(() => res.socket?.destroy(), 20);
         return;
       }
       if (req.url?.startsWith("/desk/api/upload")) {
@@ -231,6 +286,23 @@ describe("forward", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
+  it("passes the query on as written and keeps a file's size", async () => {
+    const response = await fetch(`${base}/app.js?file=a%20b&flag&x=1?y`);
+    expect(await response.text()).toBe("console.log(1)");
+    expect(response.headers.get("content-length")).toBe("14");
+    expect(selkies.seen[0].url).toBe("/desk/app.js?file=a%20b&flag&x=1?y");
+  });
+
+  it("refuses HTML in an encoding it can't read", async () => {
+    const response = await fetch(`${base}/odd.html`);
+    expect(response.status).toBe(502);
+  });
+
+  it("refuses an escaped slash without asking the container", async () => {
+    expect((await fetch(`${base}/%2Fapi/tokens`)).status).toBe(404);
+    expect(selkies.seen).toHaveLength(0);
+  });
+
   it("rejects HTML that exceeds the limit after decompression", async () => {
     const response = await fetch(`${base}/large.html`);
     expect(response.status).toBe(502);
@@ -281,6 +353,12 @@ describe("forward", () => {
     });
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("../");
+  });
+
+  it("never passes a stream cut short off as complete", async () => {
+    const response = await fetch(`${base}/cut.bin`);
+    expect(response.status).toBe(200);
+    await expect(response.text()).rejects.toThrow();
   });
 
   it("answers 502 when the container is gone", async () => {

@@ -6,6 +6,9 @@ import { isToken, type SessionStore } from "./sessions.js";
 /** Sockets the Selkies client opens below its api/ route. */
 const SOCKET_PATHS = new Set(["websockets", "webrtc/signaling"]);
 
+/** How long the container may take to answer the upgrade. */
+export const HANDSHAKE_TIMEOUT_MS = 30_000;
+
 /** Handshake headers passed on; extensions are left out so frames stay plain. */
 const PASS_HANDSHAKE = [
   "sec-websocket-key",
@@ -61,7 +64,10 @@ function refuse(socket: Duplex, status: number, reason: string): void {
  * credential, as for the page. The container's own handshake answer is
  * relayed, then bytes flow both ways untouched.
  */
-export function createSocketProxy(sessions: SessionStore) {
+export function createSocketProxy(
+  sessions: SessionStore,
+  handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS,
+) {
   return async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     socket.on("error", () => socket.destroy());
     socket.once("finish", () => socket.destroy());
@@ -102,15 +108,29 @@ export function createSocketProxy(sessions: SessionStore) {
       headers,
     });
     let settled = false;
+    // A container that accepts the connection but never answers the upgrade
+    // would otherwise hold the browser's socket open indefinitely.
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      outgoing.destroy();
+      refuse(socket, 504, "Gateway Timeout");
+    }, handshakeTimeoutMs);
+    timer.unref?.();
+    const settle = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      return true;
+    };
     socket.once("close", () => {
-      if (!settled) outgoing.destroy();
+      if (settle()) outgoing.destroy();
     });
 
     outgoing.on(
       "upgrade",
       (answer: IncomingMessage, remote: Duplex, remoteHead: Buffer) => {
-        settled = true;
-        if (socket.destroyed) {
+        if (!settle() || socket.destroyed) {
           remote.destroy();
           return;
         }
@@ -136,8 +156,8 @@ export function createSocketProxy(sessions: SessionStore) {
     );
 
     outgoing.on("response", (answer: IncomingMessage) => {
-      settled = true;
       answer.destroy();
+      if (!settle()) return;
       const status = answer.statusCode ?? 502;
       refuse(
         socket,
@@ -147,7 +167,7 @@ export function createSocketProxy(sessions: SessionStore) {
     });
 
     outgoing.on("error", () => {
-      settled = true;
+      if (!settle()) return;
       refuse(socket, 502, "Bad Gateway");
     });
 

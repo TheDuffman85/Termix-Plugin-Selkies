@@ -32,7 +32,10 @@ const SAFE_PATH = /^[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/;
  */
 export function checkPath(rest: string): string | null {
   const path = rest.replace(/^\/+/, "");
-  if (!SAFE_PATH.test(path) || path.includes("//")) return null;
+  if (!SAFE_PATH.test(path)) return null;
+  // nginx decodes "%2F" and merges slashes before it routes, so an escaped
+  // slash or backslash could reach a refused route under another spelling.
+  if (/%(2f|5c)/i.test(path)) return null;
   let decoded: string;
   try {
     decoded = decodeURIComponent(path);
@@ -40,10 +43,12 @@ export function checkPath(rest: string): string | null {
     return null;
   }
   if (decoded.includes("\\") || decoded.includes("\0")) return null;
-  if (decoded.split("/").some((part) => part === "." || part === "..")) {
-    return null;
-  }
-  if (REFUSED.some((pattern) => pattern.test(decoded))) return null;
+  const parts = decoded.split("/");
+  // Only a trailing slash may leave a segment empty.
+  if (parts.slice(0, -1).some((part) => part === "")) return null;
+  if (parts.some((part) => part === "." || part === "..")) return null;
+  const lower = decoded.toLowerCase();
+  if (REFUSED.some((pattern) => pattern.test(lower))) return null;
   return path;
 }
 
@@ -84,8 +89,24 @@ const DROP_RESPONSE = new Set([
   "cross-origin-resource-policy",
   "access-control-allow-origin",
   "access-control-allow-credentials",
-  "content-length",
 ]);
+
+/** Content codings the HTML rewrite can undo. */
+const DECODABLE = new Set(["gzip", "x-gzip", "deflate", "br", "identity"]);
+
+/**
+ * The browser's Accept-Encoding without codings the proxy can't decompress
+ * (like zstd or "*"), so an HTML answer can always be read and rewritten.
+ */
+export function decodableEncodings(value: string | string[]): string | null {
+  const list = (Array.isArray(value) ? value.join(",") : value)
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) =>
+      DECODABLE.has(part.split(";", 1)[0]!.trim().toLowerCase()),
+    );
+  return list.length ? list.join(", ") : null;
+}
 
 /**
  * The proxied page always runs sandboxed, even opened in a tab of its own, so
@@ -114,7 +135,11 @@ export function upstreamRequestHeaders(
     if (lower.startsWith("x-forwarded-") || lower.startsWith("x-termix")) {
       continue;
     }
-    if (lower === "accept-encoding" && !keepEncoding) continue;
+    if (lower === "accept-encoding") {
+      const accepted = keepEncoding ? decodableEncodings(value) : null;
+      if (accepted) out[lower] = accepted;
+      continue;
+    }
     out[lower] = value;
   }
   for (const [name, value] of Object.entries(moved)) out[name] = value;
@@ -132,10 +157,19 @@ export function upstreamRequestHeaders(
  * X-Upload-* headers the shim moved into the query. Only those names are
  * taken back, so the parameter can't set anything else on the request.
  */
-export function takeMovedHeaders(search: URLSearchParams): {
+export function takeMovedHeaders(search: URLSearchParams | string): {
   headers: Record<string, string>;
   search: string;
 } {
+  if (typeof search === "string") {
+    const query = search.replace(/^\?/, "");
+    // Most requests carry no moved headers: pass their query on exactly as
+    // the client wrote it, rather than re-encoding it.
+    if (!query.includes(MOVED_HEADERS_PARAM)) {
+      return { headers: {}, search: query ? `?${query}` : "" };
+    }
+    search = new URLSearchParams(query);
+  }
   const raw = search.get(MOVED_HEADERS_PARAM);
   search.delete(MOVED_HEADERS_PARAM);
   const rest = search.toString();
@@ -270,7 +304,7 @@ export function shimHrefFor(requestRest: string): string {
 
 function decompress(body: Buffer, encoding: string | undefined): Buffer {
   const options = { maxOutputLength: MAX_HTML_BYTES };
-  switch ((encoding ?? "").toLowerCase()) {
+  switch ((encoding ?? "").trim().toLowerCase()) {
     case "gzip":
     case "x-gzip":
       return zlib.gunzipSync(body, options);
@@ -278,8 +312,12 @@ function decompress(body: Buffer, encoding: string | undefined): Buffer {
       return zlib.inflateSync(body, options);
     case "br":
       return zlib.brotliDecompressSync(body, options);
-    default:
+    case "":
+    case "identity":
       return body;
+    default:
+      // Unreadable: answering with it would send garbage as plain HTML.
+      throw new Error(`Unsupported content encoding ${encoding}`);
   }
 }
 
@@ -340,8 +378,10 @@ export function forward(
   rawRest: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const [restPath, rawSearch = ""] = rawRest.split("?", 2);
-  const checked = checkPath(restPath ?? "");
+  const mark = rawRest.indexOf("?");
+  const restPath = mark < 0 ? rawRest : rawRest.slice(0, mark);
+  const rawSearch = mark < 0 ? "" : rawRest.slice(mark + 1);
+  const checked = checkPath(restPath);
   if (checked === null) {
     plainError(res, 404, "Not found");
     req.resume();
@@ -352,9 +392,7 @@ export function forward(
     req.resume();
     return Promise.resolve();
   }
-  const { headers: moved, search } = takeMovedHeaders(
-    new URLSearchParams(rawSearch),
-  );
+  const { headers: moved, search } = takeMovedHeaders(rawSearch);
   // A page may be HTML, which is rewritten: ask for it uncompressed.
   const mayBePage =
     checked === "" || checked.endsWith("/") || /\.html?$/i.test(checked);
@@ -405,7 +443,7 @@ export function forward(
       const headers = pageResponseHeaders(
         answer.headers,
         upstream,
-        restPath ?? "",
+        restPath,
         origin,
       );
       const type = String(answer.headers["content-type"] ?? "");
@@ -432,11 +470,9 @@ export function forward(
             finish();
             return;
           }
-          const html = injectShim(
-            body.toString("utf8"),
-            shimHrefFor(restPath ?? ""),
-          );
+          const html = injectShim(body.toString("utf8"), shimHrefFor(restPath));
           delete headers["content-encoding"];
+          delete headers["content-length"];
           delete headers.etag;
           delete headers["last-modified"];
           res.status(status);
@@ -465,10 +501,16 @@ export function forward(
       }
       answer.pipe(res);
       answer.on("end", finish);
-      answer.on("error", () => {
+      // A stream cut short must not look complete: without a Content-Length,
+      // ending the response would pass a truncated body off as the whole.
+      const broken = () => {
         if (finished) return;
-        res.end();
         finish();
+        res.destroy();
+      };
+      answer.on("error", broken);
+      answer.on("close", () => {
+        if (!answer.complete) broken();
       });
     });
     request.on("error", () => {

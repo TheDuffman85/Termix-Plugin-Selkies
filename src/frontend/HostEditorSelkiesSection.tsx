@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { MonitorPlay, Shield } from "lucide-react";
 import {
   HOST_PROTOCOL_SECRET_KEPT,
@@ -125,6 +125,71 @@ export function patchLogin(
   };
 }
 
+/**
+ * Whether the editor holds Selkies settings that differ from the saved host.
+ * Test connection uses the saved ones. The login isn't compared: a saved
+ * password comes back masked, so it can't be told apart from a new one.
+ */
+export function hasUnsavedSettings(
+  form: Record<string, unknown> | undefined,
+  host: { pluginSettings?: unknown } | undefined,
+): boolean {
+  if (!host) return false;
+  const { login: _edited, ...edited } = readForm(form);
+  const { login: _saved, ...saved } = readForm({
+    pluginSettings: host.pluginSettings,
+  });
+  return JSON.stringify(edited) !== JSON.stringify(saved);
+}
+
+/**
+ * A whole number between min and max. Text that isn't one yet, like an empty
+ * field while retyping, stays in the field without being saved, and leaving
+ * the field shows the last valid number again.
+ */
+export function NumberInput({
+  value,
+  min,
+  max,
+  onCommit,
+  placeholder,
+  "aria-label": ariaLabel,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  onCommit: (value: number) => void;
+  placeholder?: string;
+  "aria-label"?: string;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  return (
+    <Input
+      type="number"
+      min={min}
+      max={max}
+      placeholder={placeholder}
+      aria-label={ariaLabel}
+      value={text}
+      onChange={(event) => {
+        const raw = event.target.value;
+        setText(raw);
+        const parsed = Number(raw);
+        if (
+          raw.trim() !== "" &&
+          Number.isInteger(parsed) &&
+          parsed >= min &&
+          parsed <= max
+        ) {
+          onCommit(parsed);
+        }
+      }}
+      onBlur={() => setText(String(value))}
+    />
+  );
+}
+
 function Field({
   label,
   help,
@@ -191,6 +256,10 @@ export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
     }
   };
 
+  const unsaved = hasUnsavedSettings(
+    props.form as Record<string, unknown> | undefined,
+    props.host,
+  );
   const passwordKept = form.login.password === HOST_PROTOCOL_SECRET_KEPT;
   const useCredential =
     form.login.authType === "credential" && credentials.length > 0;
@@ -221,15 +290,13 @@ export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
               </Select2>
             </Field>
             <Field label={t("hosts.port")}>
-              <Input
-                type="number"
+              <NumberInput
+                aria-label={t("hosts.port")}
                 min={1}
                 max={65535}
                 placeholder={String(DEFAULT_PORT)}
                 value={form.port}
-                onChange={(event) =>
-                  setSetting("selkiesPort", Number(event.target.value))
-                }
+                onCommit={(value) => setSetting("selkiesPort", value)}
               />
             </Field>
           </div>
@@ -277,15 +344,12 @@ export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
                 label={t("hosts.idleMinutes")}
                 help={t("hosts.idleMinutesHelp")}
               >
-                <Input
+                <NumberInput
                   aria-label={t("hosts.idleMinutes")}
-                  type="number"
                   min={1}
                   max={1440}
                   value={form.idleMinutes}
-                  onChange={(event) =>
-                    setSetting("selkiesIdleMinutes", Number(event.target.value))
-                  }
+                  onCommit={(value) => setSetting("selkiesIdleMinutes", value)}
                 />
               </Field>
             </div>
@@ -436,6 +500,11 @@ export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
             >
               {test.busy ? t("hosts.testing") : t("hosts.test")}
             </Button>
+            {unsaved && !test.text && (
+              <span className="text-xs text-muted-foreground">
+                {t("hosts.testUnsaved")}
+              </span>
+            )}
             {test.text && (
               <span
                 className={`text-xs ${test.ok ? "text-accent-brand" : "text-destructive"}`}

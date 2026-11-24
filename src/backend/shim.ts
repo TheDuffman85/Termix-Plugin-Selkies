@@ -7,9 +7,13 @@
  *
  * - localStorage, sessionStorage and document.cookie throw: they are replaced
  *   with in-memory stand-ins (settings last until the tab is closed).
- * - location.origin is "null", and postMessage(msg, "null") throws: the
- *   client talks to itself that way, so "null" becomes "*" for messages to
- *   this window.
+ * - The frame's real origin (window.origin) is "null", but location.origin
+ *   still names the server. The client posts messages to itself addressed to
+ *   location.origin, which an opaque origin never matches, and drops received
+ *   messages whose origin isn't location.origin. Messages to this window
+ *   addressed to its own origin go out as "*", and only messages this window
+ *   sent itself (event.source === window) are relabelled on arrival; those
+ *   from other frames keep their real origin.
  * - WebSockets can't be served under /plugin-api, only /plugin-ws: the
  *   stream socket URL the client builds from its page address is moved to
  *   this plugin's socket route. The client opens its socket inside blob
@@ -161,20 +165,91 @@ export const SHIM_SOURCE = String.raw`(function () {
     } catch (ignored) {}
   }
 
-  // Messages to this window addressed to its own (opaque) origin.
+  // Messages from this window to itself. Its real origin is opaque, but
+  // location.origin still names the server, and the client both addresses
+  // its messages to location.origin and drops any whose origin differs.
+  var opaque = window.origin === "null";
+  var pageOrigin = location.origin;
+  function ownOrigin(target) {
+    return target === "null" || target === "/" ||
+      (opaque && target === pageOrigin);
+  }
   var nativePost = window.postMessage;
   window.postMessage = function (message, targetOrigin, transfer) {
     if (targetOrigin && typeof targetOrigin === "object") {
-      if (targetOrigin.targetOrigin === "null") {
+      if (ownOrigin(targetOrigin.targetOrigin)) {
         targetOrigin = Object.assign({}, targetOrigin, { targetOrigin: "*" });
       }
       return nativePost.call(window, message, targetOrigin);
     }
-    if (targetOrigin === "null") targetOrigin = "*";
+    if (ownOrigin(targetOrigin)) targetOrigin = "*";
     return transfer === undefined
       ? nativePost.call(window, message, targetOrigin)
       : nativePost.call(window, message, targetOrigin, transfer);
   };
+
+  // Received: only a message this window sent itself is relabelled with the
+  // page origin; messages from any other frame keep their own origin.
+  function relabel(event) {
+    if (!event || event.origin !== "null" || event.source !== window ||
+        !pageOrigin || pageOrigin === "null") {
+      return event;
+    }
+    try {
+      Object.defineProperty(event, "origin", { configurable: true, value: pageOrigin });
+      if (event.origin === pageOrigin) return event;
+    } catch (e) {}
+    var copy = Object.create(event);
+    Object.defineProperty(copy, "origin", { value: pageOrigin });
+    return copy;
+  }
+  function relabelling(listener) {
+    if (typeof listener === "function") {
+      return function (event) { return listener.call(this, relabel(event)); };
+    }
+    if (listener && typeof listener.handleEvent === "function") {
+      return function (event) { return listener.handleEvent(relabel(event)); };
+    }
+    return listener;
+  }
+  var wrapped = typeof WeakMap === "function" ? new WeakMap() : null;
+  var nativeAdd = window.addEventListener;
+  var nativeRemove = window.removeEventListener;
+  if (wrapped && nativeAdd && nativeRemove) {
+    window.addEventListener = function (type, listener, options) {
+      if (type === "message" && listener && (typeof listener === "function" || typeof listener === "object")) {
+        var wrapper = wrapped.get(listener);
+        if (!wrapper) {
+          wrapper = relabelling(listener);
+          wrapped.set(listener, wrapper);
+        }
+        return nativeAdd.call(window, type, wrapper, options);
+      }
+      return nativeAdd.apply(window, arguments);
+    };
+    window.removeEventListener = function (type, listener, options) {
+      if (type === "message" && listener && wrapped.has(listener)) {
+        return nativeRemove.call(window, type, wrapped.get(listener), options);
+      }
+      return nativeRemove.apply(window, arguments);
+    };
+  }
+  var onMessage = null;
+  try {
+    Object.defineProperty(window, "onmessage", {
+      configurable: true,
+      enumerable: true,
+      get: function () { return onMessage; },
+      set: function (handler) {
+        if (onMessage && nativeRemove) nativeRemove.call(window, "message", onMessage.__termixWrapper);
+        onMessage = typeof handler === "function" ? handler : null;
+        if (onMessage && nativeAdd) {
+          onMessage.__termixWrapper = relabelling(onMessage);
+          nativeAdd.call(window, "message", onMessage.__termixWrapper);
+        }
+      }
+    });
+  } catch (ignored) {}
 
   // Uploads: X-Upload-* headers ride a query parameter, without credentials.
   var XHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;

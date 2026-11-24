@@ -26,6 +26,7 @@ const ERROR_KEYS: Record<string, string> = {
   "not-selkies": "tab.errors.notSelkies",
   unreachable: "tab.errors.unreachable",
   unauthorized: "tab.errors.unauthorized",
+  "too-many-sessions": "tab.errors.tooManySessions",
   "access-denied": "tab.errors.forbidden",
   "access-required": "tab.errors.forbidden",
 };
@@ -41,6 +42,7 @@ export const FRAME_ALLOW =
 type State =
   | { status: "loading" }
   | { status: "failed"; message: string; directUrl: string | null }
+  | { status: "disconnected" }
   | { status: "ready"; token: string; url: string; directUrl: string | null };
 
 function Centered({ children }: { children: ReactNode }) {
@@ -90,6 +92,10 @@ export function SelkiesTab({
   handleRef,
 }: SelkiesTabProps) {
   const { t } = useTranslation();
+  // Read through a ref: t changes with the language, and that must not
+  // restart the desktop.
+  const tRef = useRef(t);
+  tRef.current = t;
   const framesAllowed = useFramesAllowed();
   const [state, setState] = useState<State>({ status: "loading" });
   const [generation, setGeneration] = useState(0);
@@ -107,7 +113,11 @@ export function SelkiesTab({
     release();
     setState({ status: "loading" });
     if (hostId === undefined || hostId === null || hostId === "") {
-      setState({ status: "failed", message: t("tab.noHost"), directUrl: null });
+      setState({
+        status: "failed",
+        message: tRef.current("tab.noHost"),
+        directUrl: null,
+      });
       return;
     }
     try {
@@ -130,11 +140,13 @@ export function SelkiesTab({
       const key = failure.code ? ERROR_KEYS[failure.code] : undefined;
       setState({
         status: "failed",
-        message: key ? t(key) : failure.message || t("tab.errors.generic"),
+        message: key
+          ? tRef.current(key)
+          : failure.message || tRef.current("tab.errors.generic"),
         directUrl: null,
       });
     }
-  }, [hostId, release, t]);
+  }, [hostId, release]);
 
   useEffect(() => {
     void start();
@@ -151,16 +163,12 @@ export function SelkiesTab({
       disconnect: () => {
         run.current++;
         release();
-        setState({
-          status: "failed",
-          message: t("tab.errors.generic"),
-          directUrl: null,
-        });
+        setState({ status: "disconnected" });
       },
       isConnected: () => state.status === "ready",
       focus: () => frame.current?.focus(),
     }),
-    [start, release, state.status, t],
+    [start, release, state.status],
   );
 
   useEffect(() => {
@@ -171,10 +179,12 @@ export function SelkiesTab({
     return <LoadingState label={t("tab.connecting")} />;
   }
 
-  if (state.status === "failed") {
+  if (state.status === "failed" || state.status === "disconnected") {
     return (
       <Centered>
-        <p className="max-w-lg">{state.message}</p>
+        <p className="max-w-lg">
+          {state.status === "failed" ? state.message : t("tab.disconnected")}
+        </p>
         <Button size="sm" variant="outline" onClick={() => void start()}>
           {t("tab.reconnect")}
         </Button>

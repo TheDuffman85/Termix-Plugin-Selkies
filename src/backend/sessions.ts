@@ -7,6 +7,18 @@ export const SESSION_IDLE_MS = 10 * 60 * 1000;
 export const SESSION_MAX_MS = 12 * 60 * 60 * 1000;
 export const SESSION_ACCESS_MS = 15_000;
 const MAX_SESSIONS = 500;
+/** One user's open desktops; their oldest ends to make room for a new one. */
+const MAX_SESSIONS_PER_USER = 20;
+
+/** Every session slot holds a live desktop: nothing can be ended for a new one. */
+export class SessionLimitError extends Error {
+  readonly code = "too-many-sessions";
+  constructor() {
+    super(
+      "Too many Selkies desktops are open on this server. Close one and try again.",
+    );
+  }
+}
 
 /**
  * One opened desktop. Its token is the only credential for the proxied page
@@ -35,6 +47,7 @@ export interface SessionStoreOptions {
   idleMs?: number;
   maxMs?: number;
   maxSessions?: number;
+  maxSessionsPerUser?: number;
   /** Keeps a managed container busy while an HTTP request or stream is open. */
   onTrack?: (session: SelkiesSession) => (() => void) | null;
 }
@@ -47,6 +60,7 @@ export function createSessionStore(
   const idleMs = options.idleMs ?? SESSION_IDLE_MS;
   const maxMs = options.maxMs ?? SESSION_MAX_MS;
   const maxSessions = options.maxSessions ?? MAX_SESSIONS;
+  const maxPerUser = options.maxSessionsPerUser ?? MAX_SESSIONS_PER_USER;
   const sessions = new Map<string, StoredSession>();
 
   function end(session: StoredSession): void {
@@ -94,12 +108,30 @@ export function createSessionStore(
       upstream: Upstream;
     }): SelkiesSession {
       prune();
+      const oldest = (list: StoredSession[]) =>
+        list.reduce<StoredSession | undefined>(
+          (found, session) =>
+            !found || session.lastUsed < found.lastUsed ? session : found,
+          undefined,
+        );
+      // A user makes room among their own desktops first.
+      for (;;) {
+        const own = [...sessions.values()].filter(
+          (session) => session.userId === data.userId,
+        );
+        if (own.length < maxPerUser) break;
+        const victim = oldest(own);
+        if (!victim) break;
+        end(victim);
+      }
+      // Server-wide, only sessions with no open stream or request make room,
+      // so one user can never end another user's live desktop.
       while (sessions.size >= maxSessions) {
-        const oldest = [...sessions.values()].sort(
-          (a, b) => a.lastUsed - b.lastUsed,
-        )[0];
-        if (!oldest) break;
-        end(oldest);
+        const victim = oldest(
+          [...sessions.values()].filter((session) => session.active === 0),
+        );
+        if (!victim) throw new SessionLimitError();
+        end(victim);
       }
       const time = now();
       const controller = new AbortController();

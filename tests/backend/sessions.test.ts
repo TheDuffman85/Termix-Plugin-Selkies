@@ -3,6 +3,7 @@ import {
   createSessionStore,
   isToken,
   SESSION_ACCESS_MS,
+  SessionLimitError,
 } from "../../src/backend/sessions.js";
 import { localUpstream } from "./helpers.js";
 
@@ -125,5 +126,61 @@ describe("sessions", () => {
     store.mint({ userId: "u", hostId: 3, upstream: localUpstream(1) });
     expect(store.size).toBe(2);
     expect(await store.use(first.token)).toBeNull();
+  });
+
+  it("makes room among a user's own sessions first", async () => {
+    let time = 0;
+    const store = createSessionStore(allow, {
+      now: () => time++,
+      maxSessionsPerUser: 2,
+    });
+    const other = store.mint({
+      userId: "v",
+      hostId: 1,
+      upstream: localUpstream(1),
+    });
+    const first = store.mint({
+      userId: "u",
+      hostId: 1,
+      upstream: localUpstream(1),
+    });
+    store.mint({ userId: "u", hostId: 2, upstream: localUpstream(1) });
+    store.mint({ userId: "u", hostId: 3, upstream: localUpstream(1) });
+    expect(store.size).toBe(3);
+    expect(await store.use(first.token)).toBeNull();
+    expect(await store.use(other.token)).toBe(other);
+  });
+
+  it("never ends another user's live desktop to make room", async () => {
+    let time = 0;
+    const store = createSessionStore(allow, {
+      now: () => time++,
+      maxSessions: 2,
+    });
+    const live = store.mint({
+      userId: "v",
+      hostId: 1,
+      upstream: localUpstream(1),
+    });
+    store.track(live);
+    const idle = store.mint({
+      userId: "v",
+      hostId: 2,
+      upstream: localUpstream(1),
+    });
+    // The idle one makes room.
+    const mine = store.mint({
+      userId: "u",
+      hostId: 3,
+      upstream: localUpstream(1),
+    });
+    expect(await store.use(idle.token)).toBeNull();
+    store.track(mine);
+    // Both left are live: refuse rather than end one.
+    expect(() =>
+      store.mint({ userId: "u", hostId: 4, upstream: localUpstream(1) }),
+    ).toThrow(SessionLimitError);
+    expect(await store.use(live.token)).toBe(live);
+    expect(await store.use(mine.token)).toBe(mine);
   });
 });
