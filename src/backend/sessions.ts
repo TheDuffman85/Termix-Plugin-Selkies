@@ -35,6 +35,8 @@ export interface SessionStoreOptions {
   idleMs?: number;
   maxMs?: number;
   maxSessions?: number;
+  /** Keeps a managed container busy while an HTTP request or stream is open. */
+  onTrack?: (session: SelkiesSession) => (() => void) | null;
 }
 
 export function createSessionStore(
@@ -146,10 +148,16 @@ export function createSessionStore(
     track(session: SelkiesSession): (() => void) | null {
       const stored = sessions.get(session.token);
       if (stored !== session) return null;
+      const release = options.onTrack?.(session);
+      if (release === null) return null;
       stored.active++;
+      let released = false;
       return () => {
+        if (released) return;
+        released = true;
         stored.active--;
         stored.lastUsed = now();
+        release?.();
       };
     },
 
@@ -164,6 +172,12 @@ export function createSessionStore(
 
     clear(): void {
       for (const session of [...sessions.values()]) end(session);
+    },
+
+    closeHost(hostId: number): void {
+      for (const session of [...sessions.values()]) {
+        if (session.hostId === hostId) end(session);
+      }
     },
 
     get size(): number {

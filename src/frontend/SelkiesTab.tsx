@@ -174,7 +174,7 @@ export function SelkiesTab({
   if (state.status === "failed") {
     return (
       <Centered>
-        <p>{state.message}</p>
+        <p className="max-w-lg">{state.message}</p>
         <Button size="sm" variant="outline" onClick={() => void start()}>
           {t("tab.reconnect")}
         </Button>

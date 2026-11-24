@@ -16,9 +16,32 @@ export interface SelkiesHostSettings {
   openInBrowser: boolean;
   /** Where a browser reaches the container itself, or "" for the default. */
   publicUrl: string;
+  manageContainer: boolean;
+  containerName: string;
+  idleMinutes: number;
 }
 
 export const DEFAULT_PORT = 3001;
+export const DEFAULT_IDLE_MINUTES = 10;
+export const MAX_IDLE_MINUTES = 1440;
+
+/** Docker names/IDs only, never shell syntax or command-line options. */
+export function containerName(value: unknown): string {
+  return typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value.trim())
+    ? value.trim()
+    : "";
+}
+
+export function idleMinutes(value: unknown): number {
+  const minutes = typeof value === "string" ? Number(value) : value;
+  return typeof minutes === "number" &&
+    Number.isInteger(minutes) &&
+    minutes >= 1 &&
+    minutes <= MAX_IDLE_MINUTES
+    ? minutes
+    : DEFAULT_IDLE_MINUTES;
+}
 
 export function asPort(value: unknown, fallback = DEFAULT_PORT): number {
   const port = typeof value === "string" ? Number(value) : value;
@@ -73,6 +96,9 @@ export function parseHostSettings(
     ignoreCert: v.selkiesIgnoreCert !== false,
     openInBrowser: v.selkiesOpenInBrowser === true,
     publicUrl: normalizePublicUrl(v.selkiesPublicUrl),
+    manageContainer: v.selkiesManageContainer === true,
+    containerName: containerName(v.selkiesContainerName),
+    idleMinutes: idleMinutes(v.selkiesIdleMinutes),
   };
 }
 

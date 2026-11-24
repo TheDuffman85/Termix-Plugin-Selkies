@@ -16,7 +16,8 @@
     "Desktop audio, keyboard, mouse, clipboard and file transfer through Termix",
     "Reaches the container directly or through the host's SSH connection",
     "The container's login stays on the server and never reaches the browser",
-    "Open in browser for microphone, gamepads and fullscreen"
+    "Open in browser for microphone, gamepads and fullscreen",
+    "Optional Docker start on connect and stop after a configurable time with no connected desktops"
   ],
   "env": [],
   "engine": {
@@ -26,6 +27,7 @@
   "capabilities": [
     "hosts:read",
     "users:impersonate",
+    "kv:own",
     "credentials:read",
     "credentials:use",
     "ssh:connect",
@@ -154,6 +156,32 @@
             "default": "",
             "hidden": true,
             "defaultable": false
+          },
+          {
+            "key": "selkiesManageContainer",
+            "type": "boolean",
+            "labelKey": "settings.host.selkiesManageContainer.label",
+            "default": false,
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesContainerName",
+            "type": "string",
+            "labelKey": "settings.host.selkiesContainerName.label",
+            "default": "",
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesIdleMinutes",
+            "type": "number",
+            "labelKey": "settings.host.selkiesIdleMinutes.label",
+            "default": 10,
+            "hidden": true,
+            "defaultable": false,
+            "min": 1,
+            "max": 1440
           }
         ]
       }

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Optional per-host Docker startup over SSH and shutdown after a configurable idle time with no connected desktops
 - Selkies desktops in WebSocket mode (webtop and other docker-baseimage-selkies images) in a Termix tab, with desktop audio
 - Reaches the container directly or through the host's SSH connection
 - The container's login is kept by Termix and added on the server, never sent to the browser
@@ -13,6 +14,8 @@
 
 ### Fixed
 
+- Docker idle shutdown keeps running when Termix would stop the idle plugin process, and resumes after a Termix restart
+- Docker startup errors explain SSH host key verification and Docker access requirements, including with the Direct desktop route
 - Test connection and launch use Selkies' HTTP readiness probe so that the browser's WebSocket can connect immediately
 - Closed sessions disconnect the browser WebSocket through Termix's sandbox bridge
 - HTTPS through SSH verifies the certificate against the saved host address

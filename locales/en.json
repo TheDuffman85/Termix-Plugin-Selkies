@@ -59,7 +59,13 @@
     "testing": "Testing…",
     "testSaveFirst": "Save the host first, then test. The test uses the saved settings.",
     "testOk": "The container answered with the saved login.",
-    "testFailed": "Test failed: {{error}}"
+    "testFailed": "Test failed: {{error}}",
+    "manageContainer": "Start and stop Docker automatically",
+    "manageContainerHelp": "Starts an existing container through this host's SSH connection when you connect or test. Stops it after no plugin desktop is connected for the time below. The SSH user must be able to run Docker without an interactive sudo prompt.",
+    "containerName": "Docker container name or ID",
+    "containerNameHelp": "An existing container on this host, such as webtop. Set up the image, ports and volumes in Docker first.",
+    "idleMinutes": "Stop after idle (minutes)",
+    "idleMinutesHelp": "1–1440 minutes; default 10. Connected desktops and transfers keep it running. Connections made directly to the container outside Termix cannot be detected."
   },
   "permissions": {
     "connect": {
@@ -102,6 +108,15 @@
       },
       "selkiesPublicUrl": {
         "label": "Address for Open in browser"
+      },
+      "selkiesManageContainer": {
+        "label": "Start and stop Docker automatically"
+      },
+      "selkiesContainerName": {
+        "label": "Docker container name or ID"
+      },
+      "selkiesIdleMinutes": {
+        "label": "Stop after idle (minutes)"
       }
     }
   }

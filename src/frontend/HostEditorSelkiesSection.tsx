@@ -44,6 +44,9 @@ export interface SelkiesForm {
   ignoreCert: boolean;
   openInBrowser: boolean;
   publicUrl: string;
+  manageContainer: boolean;
+  containerName: string;
+  idleMinutes: number;
   login: HostProtocolAuthForm;
 }
 
@@ -64,6 +67,15 @@ export function readForm(
     openInBrowser: mine.selkiesOpenInBrowser === true,
     publicUrl:
       typeof mine.selkiesPublicUrl === "string" ? mine.selkiesPublicUrl : "",
+    manageContainer: mine.selkiesManageContainer === true,
+    containerName:
+      typeof mine.selkiesContainerName === "string"
+        ? mine.selkiesContainerName
+        : "",
+    idleMinutes:
+      typeof mine.selkiesIdleMinutes === "number"
+        ? mine.selkiesIdleMinutes
+        : 10,
     login: login ? { ...EMPTY_LOGIN, ...login } : EMPTY_LOGIN,
   };
 }
@@ -233,6 +245,51 @@ export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
               <option value="ssh">{t("hosts.routeSsh")}</option>
             </Select2>
           </Field>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs">{t("hosts.manageContainer")}</span>
+              <span className="text-[11px] text-muted-foreground">
+                {t("hosts.manageContainerHelp")}
+              </span>
+            </div>
+            <FakeSwitch
+              aria-label={t("hosts.manageContainer")}
+              checked={form.manageContainer}
+              onChange={(value) => setSetting("selkiesManageContainer", value)}
+            />
+          </div>
+          {form.manageContainer && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Field
+                label={t("hosts.containerName")}
+                help={t("hosts.containerNameHelp")}
+              >
+                <Input
+                  aria-label={t("hosts.containerName")}
+                  placeholder="webtop"
+                  value={form.containerName}
+                  onChange={(event) =>
+                    setSetting("selkiesContainerName", event.target.value)
+                  }
+                />
+              </Field>
+              <Field
+                label={t("hosts.idleMinutes")}
+                help={t("hosts.idleMinutesHelp")}
+              >
+                <Input
+                  aria-label={t("hosts.idleMinutes")}
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={form.idleMinutes}
+                  onChange={(event) =>
+                    setSetting("selkiesIdleMinutes", Number(event.target.value))
+                  }
+                />
+              </Field>
+            </div>
+          )}
           {advanced && (
             <>
               <Field label={t("hosts.path")} help={t("hosts.pathHelp")}>

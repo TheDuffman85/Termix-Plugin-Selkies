@@ -14,6 +14,7 @@ servers with the same layout.
 - **Open in browser** for the microphone, gamepads and fullscreen, which Termix doesn't allow inside plugin
   tabs. Off by default; turn it on per host
 - Works from the Termix mobile app too, which opens the desktop in the phone's browser
+- Optional Docker startup on connect and shutdown after a configurable time with no connected desktops
 
 See [docs/index.md](docs/index.md) for setup and recommended container settings.
 

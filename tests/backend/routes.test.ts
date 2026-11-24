@@ -45,6 +45,7 @@ async function start(
     permissions?: string[];
     password?: string;
     enabled?: boolean;
+    manageContainer?: boolean;
   } = {},
 ) {
   let router: Router | null = null;
@@ -75,6 +76,11 @@ async function start(
   await mock.ctx.settings.setHost(1, "selkiesScheme", "http");
   await mock.ctx.settings.setHost(1, "selkiesPort", selkies.port);
   await mock.ctx.settings.setHost(1, "selkiesPath", "/desk/");
+  if (options.manageContainer) {
+    await mock.ctx.settings.setHost(1, "selkiesManageContainer", true);
+    await mock.ctx.settings.setHost(1, "selkiesContainerName", "webtop");
+    await mock.ctx.settings.setHost(1, "selkiesIdleMinutes", 1);
+  }
   await activate(mock.ctx);
 
   const app = express();
@@ -138,6 +144,160 @@ afterEach(async () => {
 });
 
 describe("routes", () => {
+  it("starts Docker and waits for the desktop to become ready", async () => {
+    await start({ manageContainer: true });
+    const exec = vi.spyOn(mock.ctx.ssh, "exec");
+    streamStatus = 503;
+    const launching = post("/launch/1");
+    await vi.waitFor(() => expect(selkies.seen).toHaveLength(1));
+    streamStatus = 204;
+    const result = await launching;
+    expect(result.status).toBe(200);
+    expect(exec).toHaveBeenCalledWith(
+      1,
+      "docker container start 'webtop'",
+      expect.anything(),
+    );
+    expect(selkies.seen.length).toBeGreaterThan(1);
+  });
+
+  it("keeps an active desktop running, then stops after disconnection", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    await start({ manageContainer: true });
+    const exec = vi.spyOn(mock.ctx.ssh, "exec");
+    const {
+      body: { token },
+    } = await post("/launch/1");
+    const ws = new WebSocket(
+      `ws://${base}/plugin-ws/selkies/stream?t=${token}`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", resolve);
+      ws.once("error", reject);
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(exec).toHaveBeenCalledTimes(1);
+      const closed = new Promise<void>((resolve) =>
+        ws.once("close", () => resolve()),
+      );
+      ws.close();
+      await closed;
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(exec).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(exec).toHaveBeenCalledTimes(2);
+      expect(exec).toHaveBeenLastCalledWith(
+        1,
+        "docker container stop --time 30 'webtop'",
+        expect.anything(),
+      );
+      expect((await fetch(`http://${base}/s/${token}/`)).status).toBe(404);
+    } finally {
+      ws.terminate();
+    }
+  });
+
+  it("never starts Docker without connect permission", async () => {
+    await start({ manageContainer: true, permissions: [] });
+    const exec = vi.spyOn(mock.ctx.ssh, "exec");
+    expect((await post("/launch/1")).status).toBe(403);
+    expect((await post("/probe/1")).status).toBe(403);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("reports Docker failures before contacting Selkies", async () => {
+    await start({ manageContainer: true });
+    vi.spyOn(mock.ctx.ssh, "exec").mockResolvedValue({
+      stdout: "",
+      stderr: "No such container: webtop",
+      code: 1,
+      timedOut: false,
+      truncated: false,
+    });
+    expect(await post("/launch/1")).toMatchObject({
+      status: 502,
+      body: {
+        code: "container-failed",
+        error: expect.stringContaining("No such container"),
+      },
+    });
+    expect(selkies.seen).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      error: Object.assign(new Error("Host denied (verification failed)"), {
+        code: "HOST_KEY_UNVERIFIED",
+      }),
+      code: "container-ssh-unverified",
+      explanation: "SSH key is not trusted yet",
+      nextStep: "verify its fingerprint and trust the key",
+    },
+    {
+      // Some core versions/bridges keep the message without the error code.
+      error: new Error(
+        "This host's key is not trusted yet. Open a terminal to the host once to check and trust it.",
+      ),
+      code: "container-ssh-unverified",
+      explanation: "SSH key is not trusted yet",
+      nextStep: "verify its fingerprint and trust the key",
+    },
+    {
+      error: Object.assign(new Error("Host denied (verification failed)"), {
+        code: "HOST_KEY_CHANGED",
+      }),
+      code: "container-ssh-key-changed",
+      explanation: "SSH key has changed",
+      nextStep: "verify the new fingerprint before trusting it",
+    },
+    {
+      error: new Error(
+        "This host's key has changed. Open a terminal to the host to check the new key.",
+      ),
+      code: "container-ssh-key-changed",
+      explanation: "SSH key has changed",
+      nextStep: "verify the new fingerprint before trusting it",
+    },
+    {
+      error: new Error("Connection lost before handshake"),
+      code: "container-failed",
+      explanation: "Could not start the Docker container over SSH",
+      nextStep: "Details: Connection lost before handshake",
+    },
+  ])(
+    "explains Docker startup failures in launch and probe: $code",
+    async ({ error, code, explanation, nextStep }) => {
+      await start({ manageContainer: true });
+      vi.spyOn(mock.ctx.ssh, "exec").mockRejectedValue(error);
+      for (const route of ["/launch/1", "/probe/1"]) {
+        const result = await post(route);
+        expect(result.status).toBe(502);
+        expect(result.body.code).toBe(code);
+        expect(result.body.error).toContain(explanation);
+        expect(result.body.error).toContain(nextStep);
+        expect(result.body.error).toContain("same host entry in Termix");
+        expect(result.body.error).toContain(
+          "even when the desktop route is Direct",
+        );
+      }
+      expect(selkies.seen).toHaveLength(0);
+    },
+  );
+
+  it("preserves connect-policy refusals during Docker startup", async () => {
+    await start({ manageContainer: true });
+    vi.spyOn(mock.ctx.ssh, "exec").mockRejectedValue(
+      Object.assign(new Error("SSH access requires approval"), {
+        code: "access-required",
+      }),
+    );
+    expect(await post("/launch/1")).toEqual({
+      status: 403,
+      body: { code: "access-required", error: "SSH access requires approval" },
+    });
+  });
+
   it("registers a public proxy route and the stream socket", async () => {
     await start();
     expect(mock.httpRouters[0]).toMatchObject({

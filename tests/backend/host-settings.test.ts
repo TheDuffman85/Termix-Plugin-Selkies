@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   asPort,
+  containerName,
+  idleMinutes,
   directUrl,
   hostPort,
   normalizePath,
@@ -20,6 +22,9 @@ describe("host settings", () => {
       ignoreCert: true,
       openInBrowser: false,
       publicUrl: "",
+      manageContainer: false,
+      containerName: "",
+      idleMinutes: 10,
     });
   });
 
@@ -34,6 +39,9 @@ describe("host settings", () => {
         selkiesIgnoreCert: false,
         selkiesOpenInBrowser: true,
         selkiesPublicUrl: "https://desk.example.com/",
+        selkiesManageContainer: true,
+        selkiesContainerName: "webtop",
+        selkiesIdleMinutes: "15",
       }),
     ).toEqual({
       enabled: true,
@@ -44,6 +52,9 @@ describe("host settings", () => {
       ignoreCert: false,
       openInBrowser: true,
       publicUrl: "https://desk.example.com/",
+      manageContainer: true,
+      containerName: "webtop",
+      idleMinutes: 15,
     });
   });
 
@@ -52,6 +63,32 @@ describe("host settings", () => {
     expect(asPort(70000)).toBe(3001);
     expect(asPort(1.5)).toBe(3001);
     expect(asPort(443)).toBe(443);
+  });
+
+  it("accepts only container names/IDs, never shell syntax or options", () => {
+    expect(containerName(" webtop-1.foo_bar ")).toBe("webtop-1.foo_bar");
+    expect(containerName("ab123def")).toBe("ab123def");
+    for (const value of [
+      "",
+      "--help",
+      "a;b",
+      "$(id)",
+      "a'b",
+      "a b",
+      "a\nb",
+      42,
+    ]) {
+      expect(containerName(value)).toBe("");
+    }
+  });
+
+  it("bounds the idle time to whole minutes between 1 and 1440", () => {
+    expect(idleMinutes("30")).toBe(30);
+    expect(idleMinutes(1)).toBe(1);
+    expect(idleMinutes(1440)).toBe(1440);
+    for (const value of [0, -1, 1.5, 1441, Infinity, NaN, "bad", null]) {
+      expect(idleMinutes(value)).toBe(10);
+    }
   });
 
   it("normalizes the subfolder and refuses anything odd", () => {

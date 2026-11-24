@@ -1,5 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
+import { setTimeout as delay } from "node:timers/promises";
+import type { ContainerManager } from "./containers.js";
 import {
   directUrl,
   readHostSettings,
@@ -16,6 +18,7 @@ import {
 export interface RouteDeps {
   ctx: PluginContext;
   sessions: SessionStore;
+  containers?: ContainerManager;
   /** Swapped in tests, which have no real container or SSH. */
   openUpstream?: (hostId: number, target: UpstreamInput) => Promise<Upstream>;
 }
@@ -57,6 +60,36 @@ function accessRefusal(error: unknown): Record<string, unknown> | null {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Explain the SSH prerequisite separately from the desktop connection. */
+function containerFailure(error: unknown): Failure {
+  const reason = message(error);
+  const code = (error as { code?: unknown } | null)?.code;
+  const context =
+    "Automatic Docker startup uses this host's SSH connection, even when the desktop route is Direct.";
+  if (
+    code === "HOST_KEY_UNVERIFIED" ||
+    /host's key is not trusted yet/i.test(reason)
+  ) {
+    return {
+      status: 502,
+      code: "container-ssh-unverified",
+      error: `Docker startup is blocked because this host's SSH key is not trusted yet. Open a normal SSH terminal for this same host entry in Termix, verify its fingerprint and trust the key, then reconnect to Selkies. ${context}`,
+    };
+  }
+  if (code === "HOST_KEY_CHANGED" || /host's key has changed/i.test(reason)) {
+    return {
+      status: 502,
+      code: "container-ssh-key-changed",
+      error: `Docker startup is blocked because this host's SSH key has changed. Open a normal SSH terminal for this same host entry in Termix and verify the new fingerprint before trusting it, then reconnect to Selkies. ${context}`,
+    };
+  }
+  return {
+    status: 502,
+    code: "container-failed",
+    error: `Could not start the Docker container over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, then check the container name and the SSH user's Docker permissions. ${context} Details: ${reason}`,
+  };
 }
 
 /** Selkies answers a plain GET with 204 when its WebSocket transport is active. */
@@ -158,6 +191,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
     settings: SelkiesHostSettings;
     ip: string;
     upstream: Upstream;
+    release: () => void;
   } | null> {
     if (!(await enabled())) {
       fail(res, disabled);
@@ -190,6 +224,28 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       });
       return null;
     }
+    let release = () => {};
+    if (settings.manageContainer) {
+      const userId = ctx.currentActor();
+      if (!userId) {
+        fail(res, {
+          status: 401,
+          code: "unauthenticated",
+          error: "Sign in first",
+        });
+        return null;
+      }
+      try {
+        if (!deps.containers)
+          throw new Error("Container management is unavailable");
+        release = await deps.containers.acquire(hostId, userId, settings);
+      } catch (error) {
+        const refusal = accessRefusal(error);
+        if (refusal) res.status(403).json(refusal);
+        else fail(res, containerFailure(error));
+        return null;
+      }
+    }
     let upstream: Upstream;
     try {
       upstream = await openUpstream(hostId, {
@@ -199,19 +255,43 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
         password: target.auth.password,
       });
     } catch (error) {
+      release();
       fail(res, { status: 502, code: "unreachable", error: message(error) });
       return null;
     }
     try {
-      const { status } = await probeUpstream(upstream);
+      // A freshly started desktop takes time to boot. Retry transport errors
+      // and startup responses, but fail bad credentials immediately.
+      const deadline = Date.now() + (settings.manageContainer ? 60_000 : 0);
+      let status: number;
+      for (;;) {
+        try {
+          ({ status } = await probeUpstream(
+            upstream,
+            settings.manageContainer ? 2000 : 10_000,
+          ));
+          if (
+            status === 204 ||
+            status === 401 ||
+            status === 403 ||
+            Date.now() >= deadline
+          )
+            break;
+        } catch (error) {
+          if (Date.now() >= deadline) throw error;
+        }
+        await delay(1000);
+      }
       const failure = probeFailure(status);
       if (failure) {
         upstream.close();
+        release();
         fail(res, failure);
         return null;
       }
     } catch (error) {
       upstream.close();
+      release();
       fail(res, { status: 502, code: "unreachable", error: message(error) });
       return null;
     }
@@ -221,6 +301,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       settings,
       ip: target.host.ip,
       upstream,
+      release,
     };
   }
 
@@ -274,28 +355,32 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       }
       const prepared = await prepare(req, res);
       if (!prepared) return;
-      if (!(await enabled())) {
-        prepared.upstream.close();
-        fail(res, disabled);
-        return;
+      try {
+        if (!(await enabled())) {
+          prepared.upstream.close();
+          fail(res, disabled);
+          return;
+        }
+        const session = sessions.mint({
+          userId,
+          hostId: prepared.hostId,
+          upstream: prepared.upstream,
+        });
+        ctx.audit.record({
+          action: "selkies_connect",
+          resourceType: "host",
+          resourceId: String(prepared.hostId),
+          resourceName: prepared.name,
+          details: prepared.settings.route,
+          success: true,
+        });
+        res.json({
+          token: session.token,
+          directUrl: directUrl(prepared.settings, prepared.ip),
+        });
+      } finally {
+        prepared.release();
       }
-      const session = sessions.mint({
-        userId,
-        hostId: prepared.hostId,
-        upstream: prepared.upstream,
-      });
-      ctx.audit.record({
-        action: "selkies_connect",
-        resourceType: "host",
-        resourceId: String(prepared.hostId),
-        resourceName: prepared.name,
-        details: prepared.settings.route,
-        success: true,
-      });
-      res.json({
-        token: session.token,
-        directUrl: directUrl(prepared.settings, prepared.ip),
-      });
     },
   );
 
@@ -332,6 +417,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       const prepared = await prepare(req, res);
       if (!prepared) return;
       prepared.upstream.close();
+      prepared.release();
       res.json({ ok: true });
     },
   );

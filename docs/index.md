@@ -52,6 +52,51 @@ ports:
   - "127.0.0.1:3001:3001" # with "Through this host's SSH connection"
 ```
 
+## Start and stop Docker automatically
+
+This optional setting is off by default. Set up a persistent Selkies container on the saved host first,
+including its image, ports, login and volumes. In the host's Selkies section:
+
+1. Turn on **Start and stop Docker automatically**.
+2. Enter its **Docker container name or ID**, for example `webtop`.
+3. Set **Stop after idle (minutes)**, from 1 to 1440 minutes (default 10).
+4. Save the host, then open the desktop or press **Test connection**.
+
+The plugin runs [`docker container start`](https://docs.docker.com/reference/cli/docker/container/start/)
+through the host's saved SSH connection, then waits up to 60 seconds for Selkies to answer. Docker must
+be installed on that host, and its SSH user must be able to run Docker without an interactive `sudo`
+prompt. This SSH connection is needed even when **Reach the container** is set to **Directly from the
+Termix server**. The plugin uses Termix's existing SSH credentials, host key checks, host access rules
+and connect policy; it does not need access to the Termix server's Docker socket.
+
+If Docker startup reports an untrusted or changed SSH host key, open a normal SSH terminal for
+**the same host entry** in Termix. Verify its fingerprint before trusting the key, then reconnect to
+Selkies. Trusting a different host entry for the same machine may not satisfy this check.
+
+Idle means **no connected desktops through this plugin**, rather than no keyboard or mouse input.
+All plugin users and tabs for that host share the timer. An open desktop stream or an active file
+transfer keeps the container running. When the last connection ends, the idle timer starts; reconnecting
+resets it. Cleanup runs every 15 seconds, so shutdown may happen up to 15 seconds after the timeout.
+Test connection also starts the container and leaves it subject to this idle timer.
+
+Shutdown runs [`docker container stop`](https://docs.docker.com/reference/cli/docker/container/stop/)
+with a 30-second grace period. It stops the existing container without removing it or its volumes.
+Save work before disconnecting: applications in the container exit when it stops. Old plugin session
+links expire on shutdown; reopen or reconnect the Termix tab to start the container again.
+
+Use one Termix host entry per managed container. Connections made outside the plugin, including
+**Open in browser** links to the container's own address, cannot keep the idle timer alive. The mobile
+app's **Open desktop** link goes through the plugin and does count. Turning automatic management off
+or changing the container name leaves the previous container running for you to manage yourself.
+
+While a managed container may still be running, the plugin asks Termix to keep its process running, so
+the idle timer is not lost when Termix stops idle plugins. It also saves which containers it manages.
+After a Termix restart the timer starts again from the restart, so a container left running is still
+stopped. While the plugin is disabled in Termix, shutdown waits until it is enabled again. A failed
+stop is logged and retried after another idle interval, using the last connecting user's permissions.
+If that user loses SSH/connect access, stop the container yourself or reconnect as a user who still has
+access.
+
 ## Microphone, gamepads and fullscreen
 
 Termix runs plugin views in a locked-down frame and allows no microphone, gamepads, fullscreen
@@ -96,6 +141,9 @@ carry, so use WebSocket mode with this plugin.
 
 ## Troubleshooting
 
+- **Docker startup is blocked**: follow the SSH host key instructions in the error. Docker control
+  needs SSH even with the Direct desktop route. For other startup failures, test this host entry's
+  normal SSH terminal, then check the container name and the SSH user's Docker permissions.
 - **The container did not answer**: check the address, port and route with **Test
   connection**. With HTTPS, keep **Accept a self-signed certificate** on unless the container
   has a real certificate.

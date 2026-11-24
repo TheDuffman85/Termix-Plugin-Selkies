@@ -165,6 +165,26 @@ describe(`${manifest.id} frontend`, () => {
     );
   });
 
+  it("shows the Docker startup explanation and host key instructions", async () => {
+    const explanation =
+      "Docker startup is blocked because this host's SSH key is not trusted yet. Open a normal SSH terminal for this same host entry in Termix, verify its fingerprint and trust the key, then reconnect to Selkies.";
+    const post = vi.fn().mockRejectedValue({
+      response: {
+        status: 502,
+        data: { code: "container-ssh-unverified", error: explanation },
+      },
+    });
+    rendered = await renderWithApp(plugin, {
+      manifest,
+      locales,
+      api: { post } as never,
+    });
+    rendered.renderTab("selkies", { host, isVisible: true });
+    expect(await screen.findByText(explanation)).toBeTruthy();
+    expect(screen.queryByText(locales.tab.errors.unreachable)).toBeNull();
+    expect(screen.getByText(locales.tab.reconnect)).toBeTruthy();
+  });
+
   it("draws the host editor section and writes settings to the form", async () => {
     rendered = await renderWithApp(plugin, { manifest, locales });
     let form: Record<string, unknown> = {};
@@ -196,6 +216,37 @@ describe(`${manifest.id} frontend`, () => {
           password: "",
           fields: {},
         },
+      },
+    });
+  });
+
+  it("offers Docker management as an optional per-host setting", async () => {
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    let form: Record<string, unknown> = {
+      pluginSettings: { selkies: { selkiesManageContainer: true } },
+    };
+    rendered.renderHostEditorSection("selkies", {
+      form,
+      setField: vi.fn(),
+      updateForm: (
+        patch: (f: Record<string, unknown>) => Record<string, unknown>,
+      ) => {
+        form = { ...form, ...patch(form) };
+      },
+      protocols: { enableSelkies: true },
+      advanced: false,
+    });
+    fireEvent.change(screen.getByLabelText(locales.hosts.containerName), {
+      target: { value: "my-webtop" },
+    });
+    fireEvent.change(screen.getByLabelText(locales.hosts.idleMinutes), {
+      target: { value: "20" },
+    });
+    expect(form.pluginSettings).toEqual({
+      selkies: {
+        selkiesManageContainer: true,
+        selkiesContainerName: "my-webtop",
+        selkiesIdleMinutes: 20,
       },
     });
   });
