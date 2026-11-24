@@ -1,25 +1,37 @@
 import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import {
-  containerName,
   DEFAULT_IDLE_MINUTES,
+  manageKind,
+  managedTarget,
   readHostSettings,
+  targetName,
+  type ManageKind,
   type SelkiesHostSettings,
 } from "./host-settings.js";
 
-/** Why the plugin process must stay up: core stops idle plugins otherwise. */
+/**
+ * Why the plugin process must stay up: core stops idle plugins otherwise.
+ * Unchanged from when Docker was the only kind, so a reason an earlier build
+ * left set is still cleared.
+ */
 export const AWAKE_REASON = "Docker idle shutdown";
 const KEY_PREFIX = "container:";
 
-/** What survives a process restart, so a running container is still stopped. */
+/**
+ * What survives a process restart, so a running container or service is still
+ * stopped. State saved before systemd support has no kind: it was Docker.
+ */
 interface StoredContainer {
   hostId: number;
   userId: string;
+  kind: ManageKind;
   name: string;
 }
 
 interface ManagedContainer {
   hostId: number;
   userId: string;
+  kind: ManageKind;
   name: string;
   idleMs: number;
   idleSince: number;
@@ -28,6 +40,50 @@ interface ManagedContainer {
   retryAt?: number;
   starting?: Promise<void>;
   stopping?: Promise<void>;
+}
+
+function missingName(kind: ManageKind): string {
+  return kind === "docker"
+    ? "Set a valid Docker container name or ID first"
+    : "Set a valid systemd service name first";
+}
+
+function sameTarget(
+  entry: { kind: ManageKind; name: string },
+  target: { kind: ManageKind; name: string },
+): boolean {
+  return entry.kind === target.kind && entry.name === target.name;
+}
+
+/**
+ * The command line for a validated name. Names are quoted anyway, and can't
+ * start with "-", so they are never read as options.
+ */
+function commandFor(
+  entry: { kind: ManageKind; name: string },
+  action: "start" | "stop",
+): { label: string; line: string; timeoutMs: number } {
+  switch (entry.kind) {
+    case "docker":
+      return {
+        label: "Docker",
+        line: `docker container ${action}${action === "stop" ? " --time 30" : ""} '${entry.name}'`,
+        timeoutMs: 60_000,
+      };
+    case "systemd-user":
+      // systemd's own stop timeout is 90 seconds by default.
+      return {
+        label: "systemd",
+        line: `systemctl --user ${action} '${entry.name}'`,
+        timeoutMs: 120_000,
+      };
+    case "systemd-system":
+      return {
+        label: "systemd",
+        line: `systemctl --no-ask-password ${action} '${entry.name}'`,
+        timeoutMs: 120_000,
+      };
+  }
 }
 
 /** One lifecycle per host, shared by all of its tabs and users. */
@@ -68,6 +124,7 @@ export function createContainerManager(
     store(entry.hostId, {
       hostId: entry.hostId,
       userId: entry.userId,
+      kind: entry.kind,
       name: entry.name,
     });
     syncAwake();
@@ -94,32 +151,33 @@ export function createContainerManager(
 
   async function command(entry: ManagedContainer, action: "start" | "stop") {
     // Validate again at the execution boundary; values are never shell code.
-    if (!entry.name || containerName(entry.name) !== entry.name) {
-      throw new Error("Set a valid Docker container name or ID first");
+    if (!entry.name || targetName(entry.kind, entry.name) !== entry.name) {
+      throw new Error(missingName(entry.kind));
     }
-    const result = await ctx.ssh.exec(
-      entry.hostId,
-      `docker container ${action}${action === "stop" ? " --time 30" : ""} '${entry.name}'`,
-      {
-        purpose: "selkies",
-        profile: "background",
-        timeoutMs: 60_000,
-        maxOutputBytes: 4096,
-      },
-    );
+    const { label, line, timeoutMs } = commandFor(entry, action);
+    const result = await ctx.ssh.exec(entry.hostId, line, {
+      purpose: "selkies",
+      profile: "background",
+      timeoutMs,
+      maxOutputBytes: 4096,
+    });
     const success = result.code === 0 && !result.timedOut;
     await ctx.audit.record({
-      action: `selkies_container_${action}`,
+      action:
+        entry.kind === "docker"
+          ? `selkies_container_${action}`
+          : `selkies_service_${action}`,
       resourceType: "host",
       resourceId: String(entry.hostId),
-      details: entry.name,
+      details:
+        entry.kind === "docker" ? entry.name : `${entry.kind}:${entry.name}`,
       success,
     });
     if (!success) {
       throw new Error(
         result.timedOut
-          ? `Docker ${action} timed out`
-          : `Docker ${action} failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
+          ? `${label} ${action} timed out`
+          : `${label} ${action} failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
       );
     }
   }
@@ -139,13 +197,15 @@ export function createContainerManager(
             key,
           )) as Partial<StoredContainer> | null;
           const hostId = Number(key.slice(KEY_PREFIX.length));
+          const kind = value?.kind === undefined ? "docker" : value.kind;
           if (
             !value ||
             value.hostId !== hostId ||
             !Number.isInteger(hostId) ||
             typeof value.userId !== "string" ||
             !value.userId ||
-            containerName(value.name) !== value.name ||
+            manageKind(kind) !== kind ||
+            targetName(kind, value.name) !== value.name ||
             !value.name
           ) {
             await ctx.kv.delete(key);
@@ -155,6 +215,7 @@ export function createContainerManager(
           containers.set(hostId, {
             hostId,
             userId: value.userId,
+            kind,
             name: value.name,
             // Read again on the first sweep.
             idleMs: DEFAULT_IDLE_MINUTES * 60_000,
@@ -176,17 +237,18 @@ export function createContainerManager(
       userId: string,
       settings: SelkiesHostSettings,
     ) {
-      if (!settings.manageContainer) return () => undefined;
+      const target = managedTarget(settings);
+      if (!target) return () => undefined;
       if (disposed) throw new Error("Selkies is shutting down");
-      if (!settings.containerName) {
-        throw new Error("Set a valid Docker container name or ID first");
-      }
+      if (!target.name) throw new Error(missingName(target.kind));
       let entry = containers.get(hostId);
-      if (entry && entry.name !== settings.containerName) {
+      if (entry && !sameTarget(entry, target)) {
         // Don't replace a lifecycle still serving other desktops.
         if (entry.busy || entry.starting || entry.stopping) {
           throw new Error(
-            "Disconnect this host's desktops before changing its container",
+            entry.kind === "docker" && target.kind === "docker"
+              ? "Disconnect this host's desktops before changing its container"
+              : "Disconnect this host's desktops before changing what starts Selkies",
           );
         }
         forget(entry);
@@ -196,7 +258,8 @@ export function createContainerManager(
         entry = {
           hostId,
           userId,
-          name: settings.containerName,
+          kind: target.kind,
+          name: target.name,
           idleMs: settings.idleMinutes * 60_000,
           idleSince: now(),
           busy: 0,
@@ -264,10 +327,8 @@ export function createContainerManager(
                 containers.get(entry.hostId) !== entry
               )
                 return;
-              if (
-                !settings.manageContainer ||
-                settings.containerName !== entry.name
-              ) {
+              const target = managedTarget(settings);
+              if (!target || !sameTarget(entry, target)) {
                 forget(entry);
                 return;
               }
@@ -303,7 +364,7 @@ export function createContainerManager(
             entry.idleSince = now();
             entry.retryAt = now() + entry.idleMs;
             ctx.log.warn(
-              `Could not stop Selkies container on host ${entry.hostId}: ${String(error)}`,
+              `Could not stop Selkies ${entry.kind === "docker" ? "container" : "service"} on host ${entry.hostId}: ${String(error)}`,
             );
           }
         }),

@@ -370,3 +370,158 @@ describe("Docker lifecycle", () => {
     expect(mock.awake.has(AWAKE_REASON)).toBe(false);
   });
 });
+
+describe("systemd lifecycle", () => {
+  const userService = parseHostSettings({
+    ...values,
+    selkiesManageType: "systemd-user",
+    selkiesServiceName: "selkies.service",
+  });
+
+  beforeEach(async () => {
+    await mock.ctx.settings.setHost(1, "selkiesManageType", "systemd-user");
+    await mock.ctx.settings.setHost(1, "selkiesServiceName", "selkies.service");
+  });
+
+  it("starts and stops a user service as the SSH user", async () => {
+    (await manager.acquire(1, "user-1", userService))();
+    expect(exec).toHaveBeenCalledWith(
+      1,
+      "systemctl --user start 'selkies.service'",
+      expect.objectContaining({ timeoutMs: 120_000 }),
+    );
+    expect(await mock.ctx.kv.get("container:1")).toEqual({
+      hostId: 1,
+      userId: "user-1",
+      kind: "systemd-user",
+      name: "selkies.service",
+    });
+    time = 60_000;
+    await manager.sweep();
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "systemctl --user stop 'selkies.service'",
+      expect.anything(),
+    );
+    expect(closeHost).toHaveBeenCalledWith(1);
+    expect(mock.audits).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "selkies_service_start",
+          details: "systemd-user:selkies.service",
+          success: true,
+        }),
+        expect.objectContaining({
+          action: "selkies_service_stop",
+          success: true,
+        }),
+      ]),
+    );
+  });
+
+  it("starts a system service without a password prompt", async () => {
+    await mock.ctx.settings.setHost(1, "selkiesManageType", "systemd-system");
+    (
+      await manager.acquire(1, "user-1", {
+        ...userService,
+        manageKind: "systemd-system",
+      })
+    )();
+    expect(exec).toHaveBeenCalledWith(
+      1,
+      "systemctl --no-ask-password start 'selkies.service'",
+      expect.anything(),
+    );
+    time = 60_000;
+    await manager.sweep();
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "systemctl --no-ask-password stop 'selkies.service'",
+      expect.anything(),
+    );
+  });
+
+  it("does not execute invalid unit names", async () => {
+    for (const name of ["", "-selkies", "a;id", "a'", "$(id)", "/etc/x"]) {
+      await expect(
+        manager.acquire(1, "user-1", { ...userService, serviceName: name }),
+      ).rejects.toThrow("systemd service");
+    }
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("reports systemd failures", async () => {
+    exec.mockResolvedValueOnce({
+      ...success,
+      code: 5,
+      stderr: "Unit selkies.service not found.",
+    });
+    await expect(manager.acquire(1, "user-1", userService)).rejects.toThrow(
+      "systemd start failed: Unit selkies.service not found.",
+    );
+  });
+
+  it("stops following the old target when the kind changes", async () => {
+    (await manager.acquire(1, "user-1", userService))();
+    await mock.ctx.settings.setHost(1, "selkiesManageType", "docker");
+    time = 60_000;
+    await manager.sweep();
+    await manager.flush();
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(await mock.ctx.kv.list()).toEqual([]);
+  });
+
+  it("refuses to switch kinds while desktops are connected", async () => {
+    const release = await manager.acquire(1, "user-1", userService);
+    await expect(manager.acquire(1, "user-1", settings)).rejects.toThrow(
+      "Disconnect this host's desktops",
+    );
+    release();
+  });
+
+  it("restores saved services, and Docker state saved without a kind", async () => {
+    await mock.ctx.kv.set("container:1", {
+      hostId: 1,
+      userId: "user-1",
+      kind: "systemd-user",
+      name: "selkies.service",
+    });
+    await mock.ctx.kv.set("container:2", {
+      hostId: 2,
+      userId: "user-1",
+      name: "webtop",
+    });
+    await mock.ctx.kv.set("container:3", {
+      hostId: 3,
+      userId: "user-1",
+      kind: "shell",
+      name: "selkies",
+    });
+    await mock.ctx.kv.set("container:4", {
+      hostId: 4,
+      userId: "user-1",
+      kind: "systemd-system",
+      name: "-x",
+    });
+    for (const [key, value] of Object.entries(values)) {
+      await mock.ctx.settings.setHost(2, key, value);
+    }
+    await manager.restore();
+    expect((await mock.ctx.kv.list()).sort()).toEqual([
+      "container:1",
+      "container:2",
+    ]);
+    time = 60_000;
+    await manager.sweep();
+    expect(exec).toHaveBeenCalledWith(
+      1,
+      "systemctl --user stop 'selkies.service'",
+      expect.anything(),
+    );
+    expect(exec).toHaveBeenCalledWith(
+      2,
+      "docker container stop --time 30 'webtop'",
+      expect.anything(),
+    );
+  });
+});

@@ -308,6 +308,33 @@ describe("routes", () => {
     },
   );
 
+  it.each([
+    {
+      type: "systemd-user",
+      hint: "loginctl enable-linger",
+    },
+    { type: "systemd-system", hint: "polkit rule" },
+  ])("explains systemd startup failures: $type", async ({ type, hint }) => {
+    await start({ manageContainer: true });
+    await mock.ctx.settings.setHost(1, "selkiesManageType", type);
+    await mock.ctx.settings.setHost(1, "selkiesServiceName", "selkies");
+    vi.spyOn(mock.ctx.ssh, "exec").mockResolvedValue({
+      stdout: "",
+      stderr: "Unit selkies.service not found.",
+      code: 5,
+      timedOut: false,
+      truncated: false,
+    });
+    const result = await post("/launch/1");
+    expect(result.status).toBe(502);
+    expect(result.body.code).toBe("container-failed");
+    expect(result.body.error).toContain("systemd");
+    expect(result.body.error).toContain(hint);
+    expect(result.body.error).toContain("Unit selkies.service not found.");
+    expect(result.body.error).not.toContain("Docker");
+    expect(selkies.seen).toHaveLength(0);
+  });
+
   it("preserves connect-policy refusals during Docker startup", async () => {
     await start({ manageContainer: true });
     vi.spyOn(mock.ctx.ssh, "exec").mockRejectedValue(

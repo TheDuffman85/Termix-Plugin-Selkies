@@ -45,7 +45,9 @@ export interface SelkiesForm {
   openInBrowser: boolean;
   publicUrl: string;
   manageContainer: boolean;
+  manageType: string;
   containerName: string;
+  serviceName: string;
   idleMinutes: number;
   login: HostProtocolAuthForm;
 }
@@ -68,9 +70,18 @@ export function readForm(
     publicUrl:
       typeof mine.selkiesPublicUrl === "string" ? mine.selkiesPublicUrl : "",
     manageContainer: mine.selkiesManageContainer === true,
+    manageType:
+      mine.selkiesManageType === "systemd-user" ||
+      mine.selkiesManageType === "systemd-system"
+        ? mine.selkiesManageType
+        : "docker",
     containerName:
       typeof mine.selkiesContainerName === "string"
         ? mine.selkiesContainerName
+        : "",
+    serviceName:
+      typeof mine.selkiesServiceName === "string"
+        ? mine.selkiesServiceName
         : "",
     idleMinutes:
       typeof mine.selkiesIdleMinutes === "number"
@@ -348,20 +359,65 @@ export function HostEditorSelkiesSection(props: HostEditorSectionProps) {
             />
           </div>
           {form.manageContainer && (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <Field
-                label={t("hosts.containerName")}
-                help={t("hosts.containerNameHelp")}
+            <Field
+              label={t("hosts.manageType")}
+              help={t(
+                form.manageType === "systemd-user"
+                  ? "hosts.manageTypeSystemdUserHelp"
+                  : form.manageType === "systemd-system"
+                    ? "hosts.manageTypeSystemdSystemHelp"
+                    : "hosts.manageTypeDockerHelp",
+              )}
+            >
+              <Select2
+                className={SELECT_CLASS}
+                aria-label={t("hosts.manageType")}
+                value={form.manageType}
+                onChange={(event) =>
+                  setSetting("selkiesManageType", event.target.value)
+                }
               >
-                <Input
-                  aria-label={t("hosts.containerName")}
-                  placeholder="webtop"
-                  value={form.containerName}
-                  onChange={(event) =>
-                    setSetting("selkiesContainerName", event.target.value)
-                  }
-                />
-              </Field>
+                <option value="docker">{t("hosts.manageTypeDocker")}</option>
+                <option value="systemd-user">
+                  {t("hosts.manageTypeSystemdUser")}
+                </option>
+                <option value="systemd-system">
+                  {t("hosts.manageTypeSystemdSystem")}
+                </option>
+              </Select2>
+            </Field>
+          )}
+          {form.manageContainer && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {form.manageType === "docker" ? (
+                <Field
+                  label={t("hosts.containerName")}
+                  help={t("hosts.containerNameHelp")}
+                >
+                  <Input
+                    aria-label={t("hosts.containerName")}
+                    placeholder="webtop"
+                    value={form.containerName}
+                    onChange={(event) =>
+                      setSetting("selkiesContainerName", event.target.value)
+                    }
+                  />
+                </Field>
+              ) : (
+                <Field
+                  label={t("hosts.serviceName")}
+                  help={t("hosts.serviceNameHelp")}
+                >
+                  <Input
+                    aria-label={t("hosts.serviceName")}
+                    placeholder="selkies.service"
+                    value={form.serviceName}
+                    onChange={(event) =>
+                      setSetting("selkiesServiceName", event.target.value)
+                    }
+                  />
+                </Field>
+              )}
               <Field
                 label={t("hosts.idleMinutes")}
                 help={t("hosts.idleMinutesHelp")}

@@ -18,7 +18,7 @@
     "Reaches the container directly or through the host's SSH connection",
     "The container's login stays on the server and never reaches the browser",
     "Open in browser for microphone, gamepads and fullscreen",
-    "Optional Docker start on connect and stop after a configurable time with no connected desktops"
+    "Optional start on connect and stop after a configurable time with no connected desktops, for a Docker container or a systemd service"
   ],
   "env": [],
   "engine": {
@@ -164,6 +164,36 @@
             "type": "boolean",
             "labelKey": "settings.host.selkiesManageContainer.label",
             "default": false,
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesManageType",
+            "type": "select",
+            "labelKey": "settings.host.selkiesManageType.label",
+            "options": [
+              {
+                "value": "docker",
+                "labelKey": "settings.host.selkiesManageType.docker"
+              },
+              {
+                "value": "systemd-user",
+                "labelKey": "settings.host.selkiesManageType.systemdUser"
+              },
+              {
+                "value": "systemd-system",
+                "labelKey": "settings.host.selkiesManageType.systemdSystem"
+              }
+            ],
+            "default": "docker",
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "selkiesServiceName",
+            "type": "string",
+            "labelKey": "settings.host.selkiesServiceName.label",
+            "default": "",
             "hidden": true,
             "defaultable": false
           },

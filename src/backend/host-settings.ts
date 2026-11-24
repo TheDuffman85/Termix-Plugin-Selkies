@@ -2,6 +2,8 @@ import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 
 export type SelkiesScheme = "https" | "http";
 export type SelkiesRoute = "direct" | "ssh";
+/** What starts and stops Selkies on the host. */
+export type ManageKind = "docker" | "systemd-user" | "systemd-system";
 
 /** One host's Selkies settings, coerced to safe values. */
 export interface SelkiesHostSettings {
@@ -16,9 +18,20 @@ export interface SelkiesHostSettings {
   openInBrowser: boolean;
   /** Where a browser reaches the container itself, or "" for the default. */
   publicUrl: string;
+  /** Whether the plugin starts Selkies on connect and stops it when idle. */
   manageContainer: boolean;
+  manageKind: ManageKind;
   containerName: string;
+  /** The systemd unit for the systemd kinds. */
+  serviceName: string;
   idleMinutes: number;
+}
+
+/** What the plugin starts and stops for a host: a kind and a validated name. */
+export interface ManagedTarget {
+  kind: ManageKind;
+  /** "" when the saved name is missing or invalid. */
+  name: string;
 }
 
 export const DEFAULT_PORT = 3001;
@@ -31,6 +44,42 @@ export function containerName(value: unknown): string {
     /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value.trim())
     ? value.trim()
     : "";
+}
+
+/**
+ * systemd unit names only, like selkies, selkies.service or selkies@1.service.
+ * Never shell syntax, paths, escapes or command-line options.
+ */
+export function serviceName(value: unknown): string {
+  return typeof value === "string" &&
+    /^[A-Za-z0-9_][A-Za-z0-9:_.@-]{0,254}$/.test(value.trim())
+    ? value.trim()
+    : "";
+}
+
+export function manageKind(value: unknown): ManageKind {
+  return value === "systemd-user" || value === "systemd-system"
+    ? value
+    : "docker";
+}
+
+/** The host's managed Docker container or systemd unit, or null when off. */
+export function managedTarget(
+  settings: SelkiesHostSettings,
+): ManagedTarget | null {
+  if (!settings.manageContainer) return null;
+  return {
+    kind: settings.manageKind,
+    name:
+      settings.manageKind === "docker"
+        ? settings.containerName
+        : settings.serviceName,
+  };
+}
+
+/** A valid name for the kind, or "": checked again before every command. */
+export function targetName(kind: ManageKind, value: unknown): string {
+  return kind === "docker" ? containerName(value) : serviceName(value);
 }
 
 export function idleMinutes(value: unknown): number {
@@ -97,7 +146,9 @@ export function parseHostSettings(
     openInBrowser: v.selkiesOpenInBrowser === true,
     publicUrl: normalizePublicUrl(v.selkiesPublicUrl),
     manageContainer: v.selkiesManageContainer === true,
+    manageKind: manageKind(v.selkiesManageType),
     containerName: containerName(v.selkiesContainerName),
+    serviceName: serviceName(v.selkiesServiceName),
     idleMinutes: idleMinutes(v.selkiesIdleMinutes),
   };
 }

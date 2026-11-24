@@ -99,49 +99,116 @@ the desktop disconnects.
 The plugin needs Selkies' WebSocket mode, the default. A server in WebRTC mode (`--mode webrtc`) answers
 Test connection with "not in WebSocket mode". Switch it back to WebSocket mode.
 
-## Start and stop Docker automatically
+## Start and stop Selkies automatically
 
-This optional setting is off by default. Set up a persistent Selkies container on the saved host first,
-including its image, ports, login and volumes. In the host's Selkies section:
+This optional setting is off by default. The plugin can start Selkies when you connect and stop it after
+no desktop has been connected for a while. It manages one of these per host:
 
-1. Turn on **Start and stop Docker automatically**.
-2. Enter its **Docker container name or ID**, for example `webtop`.
-3. Set **Stop after idle (minutes)**, from 1 to 1440 minutes (default 10).
-4. Save the host, then open the desktop or press **Test connection**.
+- **Docker container**: an existing container, such as webtop
+- **systemd user service**: a unit run by the SSH user's own systemd instance (`systemctl --user`)
+- **systemd system service**: a unit run by the host's system systemd instance (`systemctl`)
+
+Set up Selkies on the saved host first, including its ports, login and storage. Then, in the host's
+Selkies section:
+
+1. Turn on **Start and stop Selkies automatically**.
+2. Choose what **Selkies runs as**.
+3. Enter the **Docker container name or ID**, for example `webtop`, or the **systemd service**, for
+   example `selkies.service`.
+4. Set **Stop after idle (minutes)**, from 1 to 1440 minutes (default 10).
+5. Save the host, then open the desktop or press **Test connection**.
+
+The plugin runs the start command through the host's saved SSH connection, then waits up to 60 seconds
+for Selkies to answer. This SSH connection is needed even when **Reach the container** is set to
+**Directly from the Termix server**. The plugin uses Termix's existing SSH credentials, host key checks,
+host access rules and connect policy; it does not need access to the Termix server's Docker socket.
+Names are checked before use and are never run as shell code, so the plugin only accepts plain container
+names and IDs, and plain unit names (letters, digits and `:_.@-`, not starting with `-`).
+
+If startup reports an untrusted or changed SSH host key, open a normal SSH terminal for **the same host
+entry** in Termix. Verify its fingerprint before trusting the key, then reconnect to Selkies. Trusting a
+different host entry for the same machine may not satisfy this check.
+
+### Docker container
 
 The plugin runs [`docker container start`](https://docs.docker.com/reference/cli/docker/container/start/)
-through the host's saved SSH connection, then waits up to 60 seconds for Selkies to answer. Docker must
-be installed on that host, and its SSH user must be able to run Docker without an interactive `sudo`
-prompt. This SSH connection is needed even when **Reach the container** is set to **Directly from the
-Termix server**. The plugin uses Termix's existing SSH credentials, host key checks, host access rules
-and connect policy; it does not need access to the Termix server's Docker socket.
+and, when idle, [`docker container stop`](https://docs.docker.com/reference/cli/docker/container/stop/)
+with a 30-second grace period. It stops the existing container without removing it or its volumes.
+Docker must be installed on the host, and its SSH user must be able to run Docker without an interactive
+`sudo` prompt.
 
-If Docker startup reports an untrusted or changed SSH host key, open a normal SSH terminal for
-**the same host entry** in Termix. Verify its fingerprint before trusting the key, then reconnect to
-Selkies. Trusting a different host entry for the same machine may not satisfy this check.
+### systemd service
+
+Use this for Selkies installed directly on the machine. Put whatever starts your desktop session and
+Selkies into a unit, so `systemctl start` brings it up and `systemctl stop` shuts it down. The plugin runs
+`systemctl --user start <unit>` or `systemctl --no-ask-password start <unit>`, and the matching `stop`
+when idle. `systemctl stop` waits for the unit's own stop timeout (`TimeoutStopSec`, 90 seconds by
+default); the plugin gives the command up to 120 seconds.
+
+A **systemd user service** runs as the SSH user. Turn on lingering for that user, so its systemd instance
+and the service keep running after the plugin's SSH command ends:
+
+```bash
+sudo loginctl enable-linger <ssh-user>
+```
+
+A minimal user unit, in `~/.config/systemd/user/selkies.service`:
+
+```ini
+[Unit]
+Description=Selkies remote desktop
+
+[Service]
+# The command or script you use to start your desktop session and Selkies.
+ExecStart=/home/<ssh-user>/bin/start-selkies
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Run `systemctl --user daemon-reload` after adding it. It doesn't need to be enabled, since the plugin
+starts it.
+
+A **systemd system service** is started with `systemctl` as the SSH user, never with a password prompt.
+That works when the SSH user is `root`, or when a polkit rule lets it manage this one unit. For example,
+in `/etc/polkit-1/rules.d/50-selkies.rules`:
+
+```js
+polkit.addRule(function (action, subject) {
+  if (
+    action.id == "org.freedesktop.systemd1.manage-units" &&
+    action.lookup("unit") == "selkies.service" &&
+    subject.user == "<ssh-user>"
+  ) {
+    return polkit.Result.YES;
+  }
+});
+```
+
+### Idle shutdown
 
 Idle means **no connected desktops through this plugin**, rather than no keyboard or mouse input.
 All plugin users and tabs for that host share the timer. An open desktop stream or an active file
-transfer keeps the container running. When the last connection ends, the idle timer starts; reconnecting
+transfer keeps Selkies running. When the last connection ends, the idle timer starts; reconnecting
 resets it. Cleanup runs every 15 seconds, so shutdown may happen up to 15 seconds after the timeout.
-Test connection also starts the container and leaves it subject to this idle timer.
+Test connection also starts Selkies and leaves it subject to this idle timer.
 
-Shutdown runs [`docker container stop`](https://docs.docker.com/reference/cli/docker/container/stop/)
-with a 30-second grace period. It stops the existing container without removing it or its volumes.
-Save work before disconnecting: applications in the container exit when it stops. Old plugin session
-links expire on shutdown; reopen or reconnect the Termix tab to start the container again.
+Save work before disconnecting: applications in the desktop exit when it stops. Old plugin session
+links expire on shutdown; reopen or reconnect the Termix tab to start Selkies again.
 
-Use one Termix host entry per managed container. Connections made outside the plugin, including
-**Open in browser** links to the container's own address, cannot keep the idle timer alive. The mobile
-app's **Open desktop** link goes through the plugin and does count. Turning automatic management off
-or changing the container name leaves the previous container running for you to manage yourself.
+Use one Termix host entry per managed container or service. Connections made outside the plugin,
+including **Open in browser** links to Selkies' own address, cannot keep the idle timer alive. The mobile
+app's **Open desktop** link goes through the plugin and does count. Turning automatic management off,
+or changing what Selkies runs as or its name, leaves the previous container or service running for you
+to manage yourself.
 
-While a managed container may still be running, the plugin asks Termix to keep its process running, so
-the idle timer is not lost when Termix stops idle plugins. It also saves which containers it manages.
-After a Termix restart the timer starts again from the restart, so a container left running is still
+While a managed container or service may still be running, the plugin asks Termix to keep its process
+running, so the idle timer is not lost when Termix stops idle plugins. It also saves what it manages.
+After a Termix restart the timer starts again from the restart, so Selkies left running is still
 stopped. While the plugin is disabled in Termix, shutdown waits until it is enabled again. A failed
 stop is logged and retried after another idle interval, using the last connecting user's permissions.
-If that user loses SSH/connect access, stop the container yourself or reconnect as a user who still has
+If that user loses SSH/connect access, stop Selkies yourself or reconnect as a user who still has
 access.
 
 ## Microphone, gamepads and fullscreen
@@ -190,9 +257,10 @@ carry, so use WebSocket mode with this plugin.
 
 ## Troubleshooting
 
-- **Docker startup is blocked**: follow the SSH host key instructions in the error. Docker control
-  needs SSH even with the Direct desktop route. For other startup failures, test this host entry's
-  normal SSH terminal, then check the container name and the SSH user's Docker permissions.
+- **Docker or systemd startup is blocked**: follow the SSH host key instructions in the error. Automatic
+  startup needs SSH even with the Direct desktop route. For other startup failures, test this host
+  entry's normal SSH terminal, then check the container or unit name and the SSH user's permissions:
+  Docker access, lingering for a systemd user service, or root or a polkit rule for a system service.
 - **The container did not answer**: check the address, port and route with **Test
   connection**. With HTTPS, keep **Accept a self-signed certificate** on unless the container
   has a real certificate.

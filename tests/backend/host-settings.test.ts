@@ -3,6 +3,9 @@ import {
   asPort,
   containerName,
   idleMinutes,
+  manageKind,
+  managedTarget,
+  serviceName,
   directUrl,
   hostPort,
   normalizePath,
@@ -23,7 +26,9 @@ describe("host settings", () => {
       openInBrowser: false,
       publicUrl: "",
       manageContainer: false,
+      manageKind: "docker",
       containerName: "",
+      serviceName: "",
       idleMinutes: 10,
     });
   });
@@ -40,7 +45,9 @@ describe("host settings", () => {
         selkiesOpenInBrowser: true,
         selkiesPublicUrl: "https://desk.example.com/",
         selkiesManageContainer: true,
+        selkiesManageType: "systemd-user",
         selkiesContainerName: "webtop",
+        selkiesServiceName: "selkies@1.service",
         selkiesIdleMinutes: "15",
       }),
     ).toEqual({
@@ -53,7 +60,9 @@ describe("host settings", () => {
       openInBrowser: true,
       publicUrl: "https://desk.example.com/",
       manageContainer: true,
+      manageKind: "systemd-user",
       containerName: "webtop",
+      serviceName: "selkies@1.service",
       idleMinutes: 15,
     });
   });
@@ -80,6 +89,55 @@ describe("host settings", () => {
     ]) {
       expect(containerName(value)).toBe("");
     }
+  });
+
+  it("accepts only systemd unit names, never shell syntax, paths or options", () => {
+    expect(serviceName(" selkies.service ")).toBe("selkies.service");
+    expect(serviceName("selkies@1:display.service")).toBe(
+      "selkies@1:display.service",
+    );
+    for (const value of [
+      "",
+      "-selkies",
+      "--now",
+      "a;b",
+      "$(id)",
+      "a'b",
+      "a b",
+      "a\\x2d",
+      "../etc/x",
+      "/etc/x",
+      "a\nb",
+      42,
+    ]) {
+      expect(serviceName(value)).toBe("");
+    }
+  });
+
+  it("manages Docker unless a systemd kind is chosen", () => {
+    expect(manageKind(undefined)).toBe("docker");
+    expect(manageKind("bogus")).toBe("docker");
+    expect(manageKind("systemd-system")).toBe("systemd-system");
+    expect(managedTarget(parseHostSettings({}))).toBeNull();
+    expect(
+      managedTarget(
+        parseHostSettings({
+          selkiesManageContainer: true,
+          selkiesContainerName: "webtop",
+          selkiesServiceName: "selkies",
+        }),
+      ),
+    ).toEqual({ kind: "docker", name: "webtop" });
+    expect(
+      managedTarget(
+        parseHostSettings({
+          selkiesManageContainer: true,
+          selkiesManageType: "systemd-system",
+          selkiesContainerName: "webtop",
+          selkiesServiceName: "selkies",
+        }),
+      ),
+    ).toEqual({ kind: "systemd-system", name: "selkies" });
   });
 
   it("bounds the idle time to whole minutes between 1 and 1440", () => {

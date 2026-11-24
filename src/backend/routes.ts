@@ -81,11 +81,15 @@ function message(error: unknown): string {
 }
 
 /** Explain the SSH prerequisite separately from the desktop connection. */
-function containerFailure(error: unknown): Failure {
+function containerFailure(
+  error: unknown,
+  kind: SelkiesHostSettings["manageKind"],
+): Failure {
   const reason = message(error);
   const code = (error as { code?: unknown } | null)?.code;
-  const context =
-    "Automatic Docker startup uses this host's SSH connection, even when the desktop route is Direct.";
+  const docker = kind === "docker";
+  const what = docker ? "Docker" : "systemd";
+  const context = `Automatic ${what} startup uses this host's SSH connection, even when the desktop route is Direct.`;
   if (
     code === "HOST_KEY_UNVERIFIED" ||
     /host's key is not trusted yet/i.test(reason)
@@ -93,20 +97,24 @@ function containerFailure(error: unknown): Failure {
     return {
       status: 502,
       code: "container-ssh-unverified",
-      error: `Docker startup is blocked because this host's SSH key is not trusted yet. Open a normal SSH terminal for this same host entry in Termix, verify its fingerprint and trust the key, then reconnect to Selkies. ${context}`,
+      error: `${what} startup is blocked because this host's SSH key is not trusted yet. Open a normal SSH terminal for this same host entry in Termix, verify its fingerprint and trust the key, then reconnect to Selkies. ${context}`,
     };
   }
   if (code === "HOST_KEY_CHANGED" || /host's key has changed/i.test(reason)) {
     return {
       status: 502,
       code: "container-ssh-key-changed",
-      error: `Docker startup is blocked because this host's SSH key has changed. Open a normal SSH terminal for this same host entry in Termix and verify the new fingerprint before trusting it, then reconnect to Selkies. ${context}`,
+      error: `${what} startup is blocked because this host's SSH key has changed. Open a normal SSH terminal for this same host entry in Termix and verify the new fingerprint before trusting it, then reconnect to Selkies. ${context}`,
     };
   }
   return {
     status: 502,
     code: "container-failed",
-    error: `Could not start the Docker container over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, then check the container name and the SSH user's Docker permissions. ${context} Details: ${reason}`,
+    error: docker
+      ? `Could not start the Docker container over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, then check the container name and the SSH user's Docker permissions. ${context} Details: ${reason}`
+      : kind === "systemd-user"
+        ? `Could not start the systemd user service over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, that the unit exists for the SSH user, and that lingering is enabled for that user (loginctl enable-linger). ${context} Details: ${reason}`
+        : `Could not start the systemd service over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, that the unit exists, and that the SSH user may start and stop it without a password prompt (root, or a polkit rule). ${context} Details: ${reason}`,
   };
 }
 
@@ -292,12 +300,12 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       }
       try {
         if (!deps.containers)
-          throw new Error("Container management is unavailable");
+          throw new Error("Automatic startup is unavailable");
         release = await deps.containers.acquire(hostId, userId, settings);
       } catch (error) {
         const refusal = accessRefusal(error);
         if (refusal) res.status(403).json(refusal);
-        else fail(res, containerFailure(error));
+        else fail(res, containerFailure(error, settings.manageKind));
         return null;
       }
     }

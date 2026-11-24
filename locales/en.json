@@ -67,12 +67,21 @@
     "testUnsaved": "Unsaved changes: the test uses the saved settings, so save first.",
     "testOk": "The container answered with the saved login.",
     "testFailed": "Test failed: {{error}}",
-    "manageContainer": "Start and stop Docker automatically",
-    "manageContainerHelp": "Starts an existing container through this host's SSH connection when you connect or test. Stops it after no plugin desktop is connected for the time below. The SSH user must be able to run Docker without an interactive sudo prompt.",
+    "manageContainer": "Start and stop Selkies automatically",
+    "manageContainerHelp": "Starts an existing Docker container or systemd service through this host's SSH connection when you connect or test. Stops it after no plugin desktop is connected for the time below.",
+    "manageType": "Selkies runs as",
+    "manageTypeDocker": "Docker container",
+    "manageTypeSystemdUser": "systemd user service",
+    "manageTypeSystemdSystem": "systemd system service",
+    "manageTypeDockerHelp": "The SSH user must be able to run Docker without an interactive sudo prompt.",
+    "manageTypeSystemdUserHelp": "Runs systemctl --user as the SSH user. Turn on lingering for that user (loginctl enable-linger) so the service keeps running after SSH disconnects.",
+    "manageTypeSystemdSystemHelp": "Runs systemctl as the SSH user. It must be root, or allowed to start and stop the unit by a polkit rule; there is no password prompt.",
+    "serviceName": "systemd service",
+    "serviceNameHelp": "An existing unit on this host, such as selkies.service. Set up the service and its desktop session first.",
     "containerName": "Docker container name or ID",
     "containerNameHelp": "An existing container on this host, such as webtop. Set up the image, ports and volumes in Docker first.",
     "idleMinutes": "Stop after idle (minutes)",
-    "idleMinutesHelp": "1–1440 minutes; default 10. Connected desktops and transfers keep it running. Connections made directly to the container outside Termix cannot be detected."
+    "idleMinutesHelp": "1–1440 minutes; default 10. Connected desktops and transfers keep it running. Connections made directly to Selkies outside Termix cannot be detected."
   },
   "permissions": {
     "connect": {
@@ -117,7 +126,16 @@
         "label": "Address for Open in browser"
       },
       "selkiesManageContainer": {
-        "label": "Start and stop Docker automatically"
+        "label": "Start and stop Selkies automatically"
+      },
+      "selkiesManageType": {
+        "label": "Selkies runs as",
+        "docker": "Docker container",
+        "systemdUser": "systemd user service",
+        "systemdSystem": "systemd system service"
+      },
+      "selkiesServiceName": {
+        "label": "systemd service"
       },
       "selkiesContainerName": {
         "label": "Docker container name or ID"
