@@ -525,3 +525,276 @@ describe("systemd lifecycle", () => {
     );
   });
 });
+
+describe("restart", () => {
+  const userService = parseHostSettings({
+    ...values,
+    selkiesManageType: "systemd-user",
+    selkiesServiceName: "selkies.service",
+  });
+
+  function hang() {
+    let finish!: (value: typeof success) => void;
+    exec.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    return (value = success) => finish(value);
+  }
+
+  it("refuses when automatic startup is off", async () => {
+    await expect(
+      manager.restart(1, "user-1", parseHostSettings({})),
+    ).rejects.toThrow("Automatic startup is off");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("restarts a Docker container, ends the host's sessions and audits it", async () => {
+    await manager.restart(1, "user-1", settings);
+    expect(exec).toHaveBeenCalledWith(
+      1,
+      "docker container restart --time 30 'webtop'",
+      expect.objectContaining({ timeoutMs: 90_000 }),
+    );
+    expect(closeHost).toHaveBeenCalledWith(1);
+    expect(mock.audits).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "selkies_container_restart",
+          details: "webtop",
+          success: true,
+        }),
+      ]),
+    );
+    // Restarting starts the idle timer like a start does.
+    expect(await mock.ctx.kv.get("container:1")).toMatchObject({
+      userId: "user-1",
+    });
+    time = 60_000;
+    await manager.sweep();
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container stop --time 30 'webtop'",
+      expect.anything(),
+    );
+  });
+
+  it("restarts user and system services", async () => {
+    await manager.restart(1, "user-1", userService);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "systemctl --user restart 'selkies.service'",
+      expect.objectContaining({ timeoutMs: 180_000 }),
+    );
+    await manager.restart(1, "user-1", {
+      ...userService,
+      manageKind: "systemd-system",
+    });
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "systemctl --no-ask-password restart 'selkies.service'",
+      expect.anything(),
+    );
+    expect(mock.audits).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "selkies_service_restart",
+          details: "systemd-system:selkies.service",
+          success: true,
+        }),
+      ]),
+    );
+  });
+
+  it("does not execute invalid names", async () => {
+    await expect(
+      manager.restart(1, "user-1", { ...settings, containerName: "a;id" }),
+    ).rejects.toThrow("Docker container");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed restart", async () => {
+    exec.mockResolvedValueOnce({ ...success, code: 1, stderr: "boom" });
+    await expect(manager.restart(1, "user-1", settings)).rejects.toThrow(
+      "Docker restart failed: boom",
+    );
+    expect(mock.audits).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "selkies_container_restart",
+          success: false,
+        }),
+      ]),
+    );
+  });
+
+  it("waits for a start under way, then restarts", async () => {
+    const finish = hang();
+    const starting = manager.acquire(1, "user-1", settings);
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    const restarting = manager.restart(1, "user-1", settings);
+    await Promise.resolve();
+    expect(exec).toHaveBeenCalledTimes(1);
+    finish();
+    (await starting)();
+    await restarting;
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container restart --time 30 'webtop'",
+      expect.anything(),
+    );
+  });
+
+  it("shares a restart under way, and launches wait for it", async () => {
+    const finish = hang();
+    const first = manager.restart(1, "user-1", settings);
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    const second = manager.restart(1, "user-2", settings);
+    const launching = manager.acquire(1, "user-2", settings);
+    // The sweep leaves a restarting container alone.
+    time = 600_000;
+    await manager.sweep();
+    expect(exec).toHaveBeenCalledTimes(1);
+    finish();
+    await first;
+    await second;
+    (await launching)();
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for an idle stop under way, then restarts", async () => {
+    (await manager.acquire(1, "user-1", settings))();
+    const finish = hang();
+    time = 60_000;
+    const stopping = manager.sweep();
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(2));
+    const restarting = manager.restart(1, "user-2", settings);
+    finish();
+    await stopping;
+    await restarting;
+    expect(exec).toHaveBeenCalledTimes(3);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container restart --time 30 'webtop'",
+      expect.anything(),
+    );
+    // The restarted container is tracked again, now for user-2.
+    await manager.flush();
+    expect(await mock.ctx.kv.get("container:1")).toMatchObject({
+      userId: "user-2",
+    });
+  });
+});
+
+describe("stop on request", () => {
+  function hang() {
+    let finish!: (value: typeof success) => void;
+    exec.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    return (value = success) => finish(value);
+  }
+
+  it("refuses when automatic startup is off", async () => {
+    await expect(
+      manager.stop(1, "user-1", parseHostSettings({})),
+    ).rejects.toThrow("Automatic startup is off");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("stops now, ends the host's sessions and stops tracking it", async () => {
+    const release = await manager.acquire(1, "user-1", settings);
+    release();
+    await manager.stop(1, "user-1", settings);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container stop --time 30 'webtop'",
+      expect.anything(),
+    );
+    expect(closeHost).toHaveBeenCalledWith(1);
+    await manager.flush();
+    expect(await mock.ctx.kv.get("container:1")).toBeNull();
+    // Nothing left for the idle timer to stop.
+    time = 600_000;
+    await manager.sweep();
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops a service it did not start, like one left from before", async () => {
+    await manager.stop(1, "user-1", {
+      ...settings,
+      manageKind: "systemd-system",
+      serviceName: "selkies.service",
+    });
+    expect(exec).toHaveBeenCalledWith(
+      1,
+      "systemctl --no-ask-password stop 'selkies.service'",
+      expect.anything(),
+    );
+  });
+
+  it("keeps tracking after a failed stop so the idle timer retries", async () => {
+    (await manager.acquire(1, "user-1", settings))();
+    exec.mockResolvedValueOnce({ ...success, code: 1, stderr: "boom" });
+    await expect(manager.stop(1, "user-1", settings)).rejects.toThrow(
+      "Docker stop failed: boom",
+    );
+    await manager.flush();
+    expect(await mock.ctx.kv.get("container:1")).toMatchObject({
+      name: "webtop",
+    });
+  });
+
+  it("waits for a start under way, then stops", async () => {
+    const finish = hang();
+    const starting = manager.acquire(1, "user-1", settings);
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    const stopping = manager.stop(1, "user-1", settings);
+    finish();
+    (await starting)();
+    await stopping;
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container stop --time 30 'webtop'",
+      expect.anything(),
+    );
+  });
+
+  it("joins an idle stop under way", async () => {
+    (await manager.acquire(1, "user-1", settings))();
+    const finish = hang();
+    time = 60_000;
+    const sweeping = manager.sweep();
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(2));
+    const stopping = manager.stop(1, "user-2", settings);
+    finish();
+    await sweeping;
+    await stopping;
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts again for a launch that came in during the stop", async () => {
+    (await manager.acquire(1, "user-1", settings))();
+    const finish = hang();
+    const stopping = manager.stop(1, "user-1", settings);
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(2));
+    expect(manager.track(1)).toBeNull();
+    const launching = manager.acquire(1, "user-2", settings);
+    finish();
+    await stopping;
+    (await launching)();
+    expect(exec).toHaveBeenCalledTimes(3);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container start 'webtop'",
+      expect.anything(),
+    );
+  });
+});

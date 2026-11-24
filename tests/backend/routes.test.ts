@@ -587,3 +587,161 @@ describe("routes", () => {
     ]);
   });
 });
+
+describe("restart route", () => {
+  it("tells the tab whether it may offer Restart desktop", async () => {
+    await start();
+    expect((await post("/launch/1")).body.managed).toBe(false);
+    await selkies.close();
+    expect((await post("/launch/1")).body).not.toHaveProperty("managed");
+  });
+
+  it("marks launch answers and failures managed with automatic startup on", async () => {
+    await start({ manageContainer: true });
+    vi.spyOn(mock.ctx.ssh, "exec");
+    expect((await post("/launch/1")).body.managed).toBe(true);
+    // Startup responses are retried for a minute; a refused login is not.
+    streamStatus = 403;
+    expect(await post("/launch/1")).toMatchObject({
+      status: 409,
+      body: { code: "unauthorized", managed: true },
+    });
+  });
+
+  it("restarts the container, ends the host's sessions and lets the tab relaunch", async () => {
+    await start({ manageContainer: true });
+    const exec = vi.spyOn(mock.ctx.ssh, "exec");
+    const { body } = await post("/launch/1");
+    expect((await fetch(`http://${base}/s/${body.token}/`)).status).toBe(200);
+    expect(await post("/restart/1", {})).toEqual({
+      status: 200,
+      body: { ok: true },
+    });
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container restart --time 30 'webtop'",
+      expect.anything(),
+    );
+    expect((await fetch(`http://${base}/s/${body.token}/`)).status).toBe(404);
+    expect((await post("/launch/1")).status).toBe(200);
+  });
+
+  it("refuses when automatic startup is off", async () => {
+    await start();
+    const exec = vi.spyOn(mock.ctx.ssh, "exec");
+    expect(await post("/restart/1")).toMatchObject({
+      status: 409,
+      body: { code: "not-managed" },
+    });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("checks permission, the host and the admin switch first", async () => {
+    await start({ manageContainer: true, permissions: [] });
+    const exec = vi.spyOn(mock.ctx.ssh, "exec");
+    expect((await post("/restart/1")).status).toBe(403);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("answers for unknown hosts, Selkies off and the plugin off", async () => {
+    await start({ manageContainer: true });
+    const exec = vi.spyOn(mock.ctx.ssh, "exec");
+    expect((await post("/restart/2")).status).toBe(404);
+    expect((await post("/restart/abc")).status).toBe(400);
+    await mock.ctx.settings.setHost(1, "enableSelkies", false);
+    expect((await post("/restart/1")).body.code).toBe("not-enabled");
+    await mock.ctx.settings.set("enabled", false);
+    expect((await post("/restart/1")).status).toBe(503);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("explains a failed restart", async () => {
+    await start({ manageContainer: true });
+    vi.spyOn(mock.ctx.ssh, "exec").mockResolvedValue({
+      stdout: "",
+      stderr: "No such container: webtop",
+      code: 1,
+      timedOut: false,
+      truncated: false,
+    });
+    expect(await post("/restart/1")).toMatchObject({
+      status: 502,
+      body: {
+        code: "container-failed",
+        managed: true,
+        error: expect.stringContaining(
+          "Could not restart the Docker container over SSH",
+        ),
+      },
+    });
+  });
+
+  it("preserves connect-policy refusals", async () => {
+    await start({ manageContainer: true });
+    vi.spyOn(mock.ctx.ssh, "exec").mockRejectedValue(
+      Object.assign(new Error("SSH access requires approval"), {
+        code: "access-required",
+      }),
+    );
+    expect(await post("/restart/1")).toEqual({
+      status: 403,
+      body: { code: "access-required", error: "SSH access requires approval" },
+    });
+  });
+
+  it("stops the container and ends the host's sessions", async () => {
+    await start({ manageContainer: true });
+    const exec = vi.spyOn(mock.ctx.ssh, "exec");
+    const { body } = await post("/launch/1");
+    expect(await post("/stop/1", {})).toEqual({
+      status: 200,
+      body: { ok: true },
+    });
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container stop --time 30 'webtop'",
+      expect.anything(),
+    );
+    expect((await fetch(`http://${base}/s/${body.token}/`)).status).toBe(404);
+    // Opening the desktop again starts it.
+    expect((await post("/launch/1")).status).toBe(200);
+    expect(exec).toHaveBeenLastCalledWith(
+      1,
+      "docker container start 'webtop'",
+      expect.anything(),
+    );
+  });
+
+  it("refuses to stop without automatic startup or permission", async () => {
+    await start();
+    expect((await post("/stop/1")).body.code).toBe("not-managed");
+    for (const dispose of mock.disposals) await dispose();
+    server.closeAllConnections?.();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await start({ manageContainer: true, permissions: [] });
+    const exec = vi.spyOn(mock.ctx.ssh, "exec");
+    expect((await post("/stop/1")).status).toBe(403);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("explains a failed stop", async () => {
+    await start({ manageContainer: true });
+    vi.spyOn(mock.ctx.ssh, "exec").mockResolvedValue({
+      stdout: "",
+      stderr: "permission denied",
+      code: 1,
+      timedOut: false,
+      truncated: false,
+    });
+    expect(await post("/stop/1")).toMatchObject({
+      status: 502,
+      body: {
+        code: "container-failed",
+        managed: true,
+        error: expect.stringContaining(
+          "Could not stop the Docker container over SSH",
+        ),
+      },
+    });
+  });
+});

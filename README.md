@@ -15,7 +15,7 @@ server and images, and other servers with the same layout. Its defaults match th
   tabs. Off by default; turn it on per host
 - Works from the Termix mobile app too, which opens the desktop in the phone's browser
 - Optional startup on connect and shutdown after a configurable time with no connected desktops, for a
-  Docker container or a systemd service on the machine
+  Docker container or a systemd service on the machine, with **Restart desktop** and **Stop desktop** in the tab
 
 See [docs/index.md](docs/index.md) for setup and recommended container settings.
 

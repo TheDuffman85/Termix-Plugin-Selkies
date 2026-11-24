@@ -6,6 +6,8 @@
 
 - Optional per-host Docker startup over SSH and shutdown after a configurable idle time with no connected desktops
 - Automatic startup and idle shutdown can manage a systemd user or system service instead of a Docker container, for Selkies installed directly on the machine
+- Restart desktop in the tab restarts the managed Docker container or systemd service over SSH, for a desktop that was logged out or stopped responding while Selkies kept running
+- Stop desktop in the tab stops the managed Docker container or systemd service right away, instead of waiting for idle shutdown
 - Selkies desktops in WebSocket mode (webtop and other docker-baseimage-selkies images, or Selkies' own server and images) in a Termix tab, with desktop audio
 - An optional access token for Selkies servers in secure mode, added on the server and never sent to the browser
 - Test connection and the tab explain a server in WebRTC mode, or one in secure mode without a valid token

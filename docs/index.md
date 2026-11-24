@@ -171,7 +171,8 @@ Run `systemctl --user daemon-reload` after adding it. It doesn't need to be enab
 starts it.
 
 A **systemd system service** is started with `systemctl` as the SSH user, never with a password prompt.
-That works when the SSH user is `root`, or when a polkit rule lets it manage this one unit. For example,
+That works when the SSH user is `root`, or when a polkit rule lets it manage this one unit (start, stop
+and restart). For example,
 in `/etc/polkit-1/rules.d/50-selkies.rules`:
 
 ```js
@@ -185,6 +186,36 @@ polkit.addRule(function (action, subject) {
   }
 });
 ```
+
+### Restart or stop the desktop
+
+When the desktop session ends but Selkies keeps running, the tab shows a black or frozen desktop. That
+happens when you log out of the desktop (for example KDE's **Log Out**), or when the desktop crashes or
+stops responding. Selkies still answers, so neither the plugin nor Docker or systemd notice.
+
+With automatic startup on, the tab has **Restart desktop** and **Stop desktop** buttons, next to
+**Reconnect** in the toolbar and on the screen shown when a desktop could not open. Both ask first, run
+over the host's SSH connection, and end every desktop session for this host. Apps in the desktop close
+without saving, and everyone using this host's desktop through the plugin is disconnected. Anyone who may
+connect to the host can restart or stop it, as they can start it.
+
+**Restart desktop** restarts the container or service, waits for Selkies to answer and opens the new
+desktop. A stopped container or service is started. It runs:
+
+- Docker: [`docker container restart --time 30`](https://docs.docker.com/reference/cli/docker/container/restart/)
+- systemd user service: `systemctl --user restart <unit>`
+- systemd system service: `systemctl --no-ask-password restart <unit>`
+
+It is audited as `selkies_container_restart` or `selkies_service_restart`.
+
+**Stop desktop** stops the container or service right away instead of waiting for the idle timer. It
+runs the same command as idle shutdown and is audited as `selkies_container_stop` or
+`selkies_service_stop`. The tab then shows **Start desktop**. Opening the desktop again, from this or any
+other tab, starts it as on any connect.
+
+To recover without a click, make your unit exit when the desktop session ends, so `Restart=` in the
+unit brings it back. For example, have its start script wait for the desktop session and exit with an
+error code when it is gone, rather than end with `exec` of Selkies.
 
 ### Idle shutdown
 
@@ -270,4 +301,7 @@ carry, so use WebSocket mode with this plugin.
   [Secure mode and access tokens](#secure-mode-and-access-tokens).
 - **Not in WebSocket mode**: the server streams over WebRTC, which the Termix proxy can't carry. See
   [WebRTC mode](#webrtc-mode).
+- **Black or frozen desktop after logging out**: the desktop session ended while Selkies kept running.
+  Press **Restart desktop** (see [Restart or stop the desktop](#restart-or-stop-the-desktop)), or restart the container or
+  service yourself, then press **Reconnect**.
 - **No sound**: click into the desktop once. Browsers start audio only after a click on the page.

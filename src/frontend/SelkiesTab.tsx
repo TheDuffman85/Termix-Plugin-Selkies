@@ -12,11 +12,18 @@ import {
   useTranslation,
   type TabHandle,
 } from "@termix-ssh/plugin-sdk/frontend";
-import { Button, LoadingState, ToolbarBand } from "@termix-ssh/plugin-sdk/ui";
+import {
+  Button,
+  LoadingState,
+  ToolbarBand,
+  useConfirm,
+} from "@termix-ssh/plugin-sdk/ui";
 import {
   closeSession,
   launch,
+  restart,
   sessionUrl,
+  stop,
   type SelkiesApiError,
 } from "./selkies-api";
 
@@ -31,6 +38,7 @@ const ERROR_KEYS: Record<string, string> = {
   "too-many-sessions": "tab.errors.tooManySessions",
   "access-denied": "tab.errors.forbidden",
   "access-required": "tab.errors.forbidden",
+  "not-managed": "tab.errors.notManaged",
 };
 
 /**
@@ -42,9 +50,10 @@ export const FRAME_ALLOW =
   "autoplay; clipboard-read; clipboard-write; fullscreen; microphone; gamepad; keyboard-map; display-capture";
 
 type State =
-  | { status: "loading" }
+  | { status: "loading"; action?: "restart" | "stop" }
   | { status: "failed"; message: string; directUrl: string | null }
   | { status: "disconnected" }
+  | { status: "stopped" }
   | { status: "ready"; token: string; url: string; directUrl: string | null };
 
 function Centered({ children }: { children: ReactNode }) {
@@ -104,6 +113,9 @@ export function SelkiesTab({
   const frame = useRef<HTMLIFrameElement>(null);
   const token = useRef<string | null>(null);
   const run = useRef(0);
+  const confirm = useConfirm();
+  // Whether the host has automatic startup on, from the last launch's answer.
+  const [managed, setManaged] = useState(false);
 
   const release = useCallback(() => {
     if (token.current) closeSession(token.current);
@@ -129,6 +141,7 @@ export function SelkiesTab({
         return;
       }
       token.current = result.token;
+      setManaged(result.managed === true);
       setState({
         status: "ready",
         token: result.token,
@@ -140,6 +153,7 @@ export function SelkiesTab({
       if (current !== run.current) return;
       const failure = error as SelkiesApiError;
       const key = failure.code ? ERROR_KEYS[failure.code] : undefined;
+      setManaged(failure.managed === true);
       setState({
         status: "failed",
         message: key
@@ -149,6 +163,46 @@ export function SelkiesTab({
       });
     }
   }, [hostId, release]);
+
+  /**
+   * Restarts the host's container or service, for a desktop that logged out
+   * or hangs, then opens the new desktop. Or stops it, until the next start.
+   */
+  const manage = useCallback(
+    async (action: "restart" | "stop") => {
+      if (hostId === undefined || hostId === null || hostId === "") return;
+      const confirmed = await confirm({
+        title: tRef.current(`tab.${action}.title`),
+        description: tRef.current(`tab.${action}.description`),
+        confirmLabel: tRef.current(`tab.${action}.confirm`),
+        destructive: true,
+      });
+      if (!confirmed) return;
+      const current = ++run.current;
+      release();
+      setState({ status: "loading", action });
+      try {
+        await (action === "restart" ? restart(hostId) : stop(hostId));
+      } catch (error) {
+        if (current !== run.current) return;
+        const failure = error as SelkiesApiError;
+        const key = failure.code ? ERROR_KEYS[failure.code] : undefined;
+        setManaged(failure.managed === true);
+        setState({
+          status: "failed",
+          message: key
+            ? tRef.current(key)
+            : failure.message || tRef.current(`tab.errors.${action}Failed`),
+          directUrl: null,
+        });
+        return;
+      }
+      if (current !== run.current) return;
+      if (action === "restart") await start();
+      else setState({ status: "stopped" });
+    },
+    [hostId, confirm, release, start],
+  );
 
   useEffect(() => {
     void start();
@@ -178,8 +232,45 @@ export function SelkiesTab({
   }, [isVisible, state.status]);
 
   if (state.status === "loading") {
-    return <LoadingState label={t("tab.connecting")} />;
+    return (
+      <LoadingState
+        label={t(
+          state.action === "restart"
+            ? "tab.restarting"
+            : state.action === "stop"
+              ? "tab.stopping"
+              : "tab.connecting",
+        )}
+      />
+    );
   }
+
+  if (state.status === "stopped") {
+    return (
+      <Centered>
+        <p className="max-w-lg">{t("tab.stopped")}</p>
+        <Button size="sm" variant="outline" onClick={() => void start()}>
+          {t("tab.startDesktop")}
+        </Button>
+      </Centered>
+    );
+  }
+
+  const size = state.status === "ready" ? "xs" : "sm";
+  const manageButtons = managed && (
+    <>
+      <Button
+        size={size}
+        variant="ghost"
+        onClick={() => void manage("restart")}
+      >
+        {t("tab.restart.button")}
+      </Button>
+      <Button size={size} variant="ghost" onClick={() => void manage("stop")}>
+        {t("tab.stop.button")}
+      </Button>
+    </>
+  );
 
   if (state.status === "failed" || state.status === "disconnected") {
     return (
@@ -187,9 +278,12 @@ export function SelkiesTab({
         <p className="max-w-lg">
           {state.status === "failed" ? state.message : t("tab.disconnected")}
         </p>
-        <Button size="sm" variant="outline" onClick={() => void start()}>
-          {t("tab.reconnect")}
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => void start()}>
+            {t("tab.reconnect")}
+          </Button>
+          {manageButtons}
+        </div>
       </Centered>
     );
   }
@@ -216,6 +310,7 @@ export function SelkiesTab({
           <Button size="xs" variant="ghost" onClick={() => void start()}>
             {t("tab.reconnect")}
           </Button>
+          {manageButtons}
           {directUrl && (
             <a
               href={directUrl}
@@ -242,6 +337,7 @@ export function SelkiesTab({
         <Button size="xs" variant="ghost" onClick={() => void start()}>
           {t("tab.reconnect")}
         </Button>
+        {manageButtons}
         {directUrl && (
           <Button
             size="xs"

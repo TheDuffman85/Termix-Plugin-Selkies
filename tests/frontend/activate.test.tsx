@@ -165,6 +165,201 @@ describe(`${manifest.id} frontend`, () => {
     );
   });
 
+  it("offers Restart desktop only with automatic startup on", async () => {
+    const post = vi.fn(async (url: string) =>
+      url === "/launch/7"
+        ? { data: { token: TOKEN, directUrl: null, managed: false } }
+        : { data: { closed: true } },
+    );
+    rendered = await renderWithApp(plugin, {
+      manifest,
+      locales,
+      api: { post } as never,
+    });
+    rendered.renderTab("selkies", { host, isVisible: true });
+    await screen.findByTitle(locales.tab.title);
+    expect(screen.queryByText(locales.tab.restart.button)).toBeNull();
+    expect(screen.queryByText(locales.tab.stop.button)).toBeNull();
+  });
+
+  it("restarts the desktop after asking, then opens the new one", async () => {
+    const second = "n".repeat(43);
+    let launches = 0;
+    const post = vi.fn(async (url: string) => {
+      if (url === "/launch/7") {
+        launches++;
+        return {
+          data: {
+            token: launches === 1 ? TOKEN : second,
+            directUrl: null,
+            managed: true,
+          },
+        };
+      }
+      if (url === "/restart/7") return { data: { ok: true } };
+      return { data: { closed: true } };
+    });
+    rendered = await renderWithApp(plugin, {
+      manifest,
+      locales,
+      api: { post } as never,
+    });
+    rendered.renderTab("selkies", { host, isVisible: true });
+    await screen.findByTitle(locales.tab.title);
+    fireEvent.click(screen.getByText(locales.tab.restart.button));
+    expect(await screen.findByText(locales.tab.restart.title)).toBeTruthy();
+    expect(post).toHaveBeenCalledTimes(1);
+    fireEvent.click(
+      screen.getByRole("button", { name: locales.tab.restart.confirm }),
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByTitle(locales.tab.title) as HTMLIFrameElement).src,
+      ).toContain(second),
+    );
+    expect(post.mock.calls.map(([url]) => url)).toEqual([
+      "/launch/7",
+      `/sessions/${TOKEN}/close`,
+      "/restart/7",
+      "/launch/7",
+    ]);
+  });
+
+  it("leaves the desktop alone when the restart is cancelled", async () => {
+    const post = vi.fn(async (url: string) =>
+      url === "/launch/7"
+        ? { data: { token: TOKEN, directUrl: null, managed: true } }
+        : { data: { closed: true } },
+    );
+    rendered = await renderWithApp(plugin, {
+      manifest,
+      locales,
+      api: { post } as never,
+    });
+    rendered.renderTab("selkies", { host, isVisible: true });
+    await screen.findByTitle(locales.tab.title);
+    fireEvent.click(screen.getByText(locales.tab.restart.button));
+    await screen.findByText(locales.tab.restart.title);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(screen.queryByText(locales.tab.restart.title)).toBeNull(),
+    );
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(screen.getByTitle(locales.tab.title)).toBeTruthy();
+  });
+
+  it("offers Restart desktop when a managed desktop fails, and shows a failed restart", async () => {
+    const post = vi.fn(async (url: string) => {
+      if (url === "/launch/7") {
+        throw {
+          response: {
+            status: 502,
+            data: { code: "unreachable", error: "x", managed: true },
+          },
+        };
+      }
+      throw {
+        response: {
+          status: 502,
+          data: {
+            code: "container-failed",
+            error: "Could not restart the Docker container over SSH.",
+            managed: true,
+          },
+        },
+      };
+    });
+    rendered = await renderWithApp(plugin, {
+      manifest,
+      locales,
+      api: { post } as never,
+    });
+    rendered.renderTab("selkies", { host, isVisible: true });
+    expect(
+      await screen.findByText(locales.tab.errors.unreachable),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByText(locales.tab.restart.button));
+    fireEvent.click(
+      await screen.findByRole("button", { name: locales.tab.restart.confirm }),
+    );
+    expect(
+      await screen.findByText(
+        "Could not restart the Docker container over SSH.",
+      ),
+    ).toBeTruthy();
+    expect(post).toHaveBeenLastCalledWith("/restart/7", {});
+    // Still offered, to try again once the cause is fixed.
+    expect(screen.getByText(locales.tab.restart.button)).toBeTruthy();
+  });
+
+  it("stops the desktop after asking, and starts it again on request", async () => {
+    const post = vi.fn(async (url: string) => {
+      if (url === "/launch/7") {
+        return { data: { token: TOKEN, directUrl: null, managed: true } };
+      }
+      return { data: { ok: true, closed: true } };
+    });
+    rendered = await renderWithApp(plugin, {
+      manifest,
+      locales,
+      api: { post } as never,
+    });
+    rendered.renderTab("selkies", { host, isVisible: true });
+    await screen.findByTitle(locales.tab.title);
+    fireEvent.click(screen.getByText(locales.tab.stop.button));
+    expect(await screen.findByText(locales.tab.stop.title)).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: locales.tab.stop.confirm }),
+    );
+    expect(await screen.findByText(locales.tab.stopped)).toBeTruthy();
+    expect(screen.queryByTitle(locales.tab.title)).toBeNull();
+    expect(screen.queryByText(locales.tab.stop.button)).toBeNull();
+    expect(post.mock.calls.map(([url]) => url)).toEqual([
+      "/launch/7",
+      `/sessions/${TOKEN}/close`,
+      "/stop/7",
+    ]);
+    fireEvent.click(screen.getByText(locales.tab.startDesktop));
+    await screen.findByTitle(locales.tab.title);
+    expect(post).toHaveBeenLastCalledWith("/launch/7", {});
+  });
+
+  it("shows a failed stop", async () => {
+    const post = vi.fn(async (url: string) => {
+      if (url === "/launch/7") {
+        return { data: { token: TOKEN, directUrl: null, managed: true } };
+      }
+      if (url === "/stop/7") {
+        throw {
+          response: {
+            status: 502,
+            data: {
+              code: "container-failed",
+              error: "Could not stop the Docker container over SSH.",
+              managed: true,
+            },
+          },
+        };
+      }
+      return { data: { closed: true } };
+    });
+    rendered = await renderWithApp(plugin, {
+      manifest,
+      locales,
+      api: { post } as never,
+    });
+    rendered.renderTab("selkies", { host, isVisible: true });
+    await screen.findByTitle(locales.tab.title);
+    fireEvent.click(screen.getByText(locales.tab.stop.button));
+    fireEvent.click(
+      await screen.findByRole("button", { name: locales.tab.stop.confirm }),
+    );
+    expect(
+      await screen.findByText("Could not stop the Docker container over SSH."),
+    ).toBeTruthy();
+    expect(screen.getByText(locales.tab.stop.button)).toBeTruthy();
+  });
+
   it("shows the Docker startup explanation and host key instructions", async () => {
     const explanation =
       "Docker startup is blocked because this host's SSH key is not trusted yet. Open a normal SSH terminal for this same host entry in Termix, verify its fingerprint and trust the key, then reconnect to Selkies.";

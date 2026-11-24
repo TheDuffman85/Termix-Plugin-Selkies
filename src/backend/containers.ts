@@ -39,8 +39,12 @@ interface ManagedContainer {
   /** After a failure, the sweep leaves the entry alone until then. */
   retryAt?: number;
   starting?: Promise<void>;
+  /** Set alongside `starting` while it is a restart, so restarts are shared. */
+  restarting?: Promise<void>;
   stopping?: Promise<void>;
 }
+
+type Action = "start" | "stop" | "restart";
 
 function missingName(kind: ManageKind): string {
   return kind === "docker"
@@ -61,27 +65,23 @@ function sameTarget(
  */
 function commandFor(
   entry: { kind: ManageKind; name: string },
-  action: "start" | "stop",
+  action: Action,
 ): { label: string; line: string; timeoutMs: number } {
   switch (entry.kind) {
     case "docker":
       return {
         label: "Docker",
-        line: `docker container ${action}${action === "stop" ? " --time 30" : ""} '${entry.name}'`,
-        timeoutMs: 60_000,
+        line: `docker container ${action}${action === "start" ? "" : " --time 30"} '${entry.name}'`,
+        // A restart waits up to 30 seconds for the stop, then starts.
+        timeoutMs: action === "restart" ? 90_000 : 60_000,
       };
     case "systemd-user":
-      // systemd's own stop timeout is 90 seconds by default.
-      return {
-        label: "systemd",
-        line: `systemctl --user ${action} '${entry.name}'`,
-        timeoutMs: 120_000,
-      };
     case "systemd-system":
       return {
         label: "systemd",
-        line: `systemctl --no-ask-password ${action} '${entry.name}'`,
-        timeoutMs: 120_000,
+        line: `${entry.kind === "systemd-user" ? "systemctl --user" : "systemctl --no-ask-password"} ${action} '${entry.name}'`,
+        // systemd's own stop timeout is 90 seconds by default.
+        timeoutMs: action === "restart" ? 180_000 : 120_000,
       };
   }
 }
@@ -149,7 +149,7 @@ export function createContainerManager(
     };
   }
 
-  async function command(entry: ManagedContainer, action: "start" | "stop") {
+  async function command(entry: ManagedContainer, action: Action) {
     // Validate again at the execution boundary; values are never shell code.
     if (!entry.name || targetName(entry.kind, entry.name) !== entry.name) {
       throw new Error(missingName(entry.kind));
@@ -179,6 +179,56 @@ export function createContainerManager(
           ? `${label} ${action} timed out`
           : `${label} ${action} failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
       );
+    }
+  }
+
+  /** The host's lifecycle for this target, made or replaced as needed. */
+  function entryFor(
+    hostId: number,
+    userId: string,
+    settings: SelkiesHostSettings,
+    target: { kind: ManageKind; name: string },
+  ): ManagedContainer {
+    if (disposed) throw new Error("Selkies is shutting down");
+    if (!target.name) throw new Error(missingName(target.kind));
+    let entry = containers.get(hostId);
+    if (entry && !sameTarget(entry, target)) {
+      // Don't replace a lifecycle still serving other desktops.
+      if (entry.busy || entry.starting || entry.stopping) {
+        throw new Error(
+          entry.kind === "docker" && target.kind === "docker"
+            ? "Disconnect this host's desktops before changing its container"
+            : "Disconnect this host's desktops before changing what starts Selkies",
+        );
+      }
+      forget(entry);
+      entry = undefined;
+    }
+    if (!entry) {
+      entry = {
+        hostId,
+        userId,
+        kind: target.kind,
+        name: target.name,
+        idleMs: settings.idleMinutes * 60_000,
+        idleSince: now(),
+        busy: 0,
+      };
+      remember(entry);
+    }
+    entry.idleMs = settings.idleMinutes * 60_000;
+    return entry;
+  }
+
+  /**
+   * Idle shutdown runs as the last user whose own start succeeded. A failed
+   * attempt (say, SSH refused for this user) keeps the previous one, and
+   * joining someone else's start proves nothing about access.
+   */
+  function takeOver(entry: ManagedContainer, userId: string): void {
+    if (entry.userId !== userId && containers.get(entry.hostId) === entry) {
+      entry.userId = userId;
+      remember(entry);
     }
   }
 
@@ -239,34 +289,7 @@ export function createContainerManager(
     ) {
       const target = managedTarget(settings);
       if (!target) return () => undefined;
-      if (disposed) throw new Error("Selkies is shutting down");
-      if (!target.name) throw new Error(missingName(target.kind));
-      let entry = containers.get(hostId);
-      if (entry && !sameTarget(entry, target)) {
-        // Don't replace a lifecycle still serving other desktops.
-        if (entry.busy || entry.starting || entry.stopping) {
-          throw new Error(
-            entry.kind === "docker" && target.kind === "docker"
-              ? "Disconnect this host's desktops before changing its container"
-              : "Disconnect this host's desktops before changing what starts Selkies",
-          );
-        }
-        forget(entry);
-        entry = undefined;
-      }
-      if (!entry) {
-        entry = {
-          hostId,
-          userId,
-          kind: target.kind,
-          name: target.name,
-          idleMs: settings.idleMinutes * 60_000,
-          idleSince: now(),
-          busy: 0,
-        };
-        remember(entry);
-      }
-      entry.idleMs = settings.idleMinutes * 60_000;
+      const entry = entryFor(hostId, userId, settings, target);
       const release = hold(entry);
       try {
         // A reconnect during stop waits, then starts again. Commands never race.
@@ -281,22 +304,86 @@ export function createContainerManager(
           });
         }
         await entry.starting;
-        // Idle shutdown runs as the last user whose own start succeeded. A
-        // failed attempt (say, SSH refused for this user) keeps the previous
-        // one, and joining someone else's start proves nothing about access.
-        if (
-          ownStart &&
-          entry.userId !== userId &&
-          containers.get(hostId) === entry
-        ) {
-          entry.userId = userId;
-          remember(entry);
-        }
+        if (ownStart) takeOver(entry, userId);
         return release;
       } catch (error) {
         release();
         throw error;
       }
+    },
+
+    /**
+     * Restarts the host's container or service, for a desktop session that
+     * ended or hangs while Selkies itself still answers. Ends the host's
+     * sessions, since their desktop goes away. Starts it when it was stopped.
+     */
+    async restart(
+      hostId: number,
+      userId: string,
+      settings: SelkiesHostSettings,
+    ): Promise<void> {
+      const target = managedTarget(settings);
+      if (!target) throw new Error("Automatic startup is off for this host");
+      const entry = entryFor(hostId, userId, settings, target);
+      const release = hold(entry);
+      try {
+        // Let a start or stop under way finish first: commands never race.
+        // A restart someone else began is joined, since one is enough.
+        while (entry.starting || entry.stopping) {
+          if (entry.restarting) {
+            await entry.restarting;
+            return;
+          }
+          await Promise.allSettled([entry.starting, entry.stopping]);
+        }
+        if (disposed) throw new Error("Selkies is shutting down");
+        const current = entry;
+        const restarting = command(entry, "restart").finally(() => {
+          current.starting = undefined;
+          current.restarting = undefined;
+        });
+        // Launches wait for it like for a start, and the sweep leaves it alone.
+        entry.starting = entry.restarting = restarting;
+        // Streams to the old desktop end now rather than hang on it.
+        closeHost(hostId);
+        await restarting;
+        takeOver(entry, userId);
+      } finally {
+        release();
+      }
+    },
+
+    /**
+     * Stops the host's container or service now, as the idle timer would.
+     * Ends the host's sessions. A launch afterwards starts it again.
+     */
+    async stop(
+      hostId: number,
+      userId: string,
+      settings: SelkiesHostSettings,
+    ): Promise<void> {
+      const target = managedTarget(settings);
+      if (!target) throw new Error("Automatic startup is off for this host");
+      const entry = entryFor(hostId, userId, settings, target);
+      // Let a start or restart under way finish first: commands never race.
+      // A stop someone else began is enough once it succeeded.
+      while (entry.starting || entry.stopping) {
+        await Promise.allSettled([entry.starting, entry.stopping]);
+        if (containers.get(hostId) !== entry) return;
+      }
+      if (disposed) throw new Error("Selkies is shutting down");
+      const current = entry;
+      entry.stopping = Promise.resolve()
+        .then(async () => {
+          closeHost(hostId);
+          await command(entry, "stop");
+          // A launch may be waiting to start this same entry again.
+          if (!entry.busy) forget(entry);
+        })
+        .finally(() => {
+          current.stopping = undefined;
+        });
+      await entry.stopping;
     },
 
     /** Includes HTTP transfers as well as long-lived desktop streams. */

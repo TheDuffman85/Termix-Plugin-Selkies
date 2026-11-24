@@ -36,12 +36,17 @@ export function selkiesEnabled(
 export interface SelkiesApiError extends Error {
   code?: string;
   status?: number;
+  /** The host has automatic startup on: Restart and Stop desktop are offered. */
+  managed?: boolean;
 }
 
 export function apiError(error: unknown): SelkiesApiError {
   const failure = error as {
     message?: string;
-    response?: { status?: number; data?: { error?: string; code?: string } };
+    response?: {
+      status?: number;
+      data?: { error?: string; code?: string; managed?: boolean };
+    };
   };
   const data = failure?.response?.data;
   const wrapped: SelkiesApiError = new Error(
@@ -49,6 +54,7 @@ export function apiError(error: unknown): SelkiesApiError {
   );
   wrapped.code = data?.code;
   wrapped.status = failure?.response?.status;
+  wrapped.managed = data?.managed === true;
   return wrapped;
 }
 
@@ -56,6 +62,8 @@ export interface LaunchResult {
   token: string;
   /** The container's own address, or null when Open in browser is off. */
   directUrl: string | null;
+  /** The host has automatic startup on: Restart and Stop desktop are offered. */
+  managed?: boolean;
 }
 
 export async function launch(hostId: string | number): Promise<LaunchResult> {
@@ -73,6 +81,30 @@ export async function launch(hostId: string | number): Promise<LaunchResult> {
 export async function probe(hostId: string | number): Promise<void> {
   try {
     await app().api.post(`/probe/${encodeURIComponent(String(hostId))}`, {});
+  } catch (error) {
+    throw apiError(error);
+  }
+}
+
+/**
+ * Restarts the host's managed container or service. Its sessions end, so
+ * launch again afterwards.
+ */
+export async function restart(hostId: string | number): Promise<void> {
+  try {
+    await app().api.post(`/restart/${encodeURIComponent(String(hostId))}`, {});
+  } catch (error) {
+    throw apiError(error);
+  }
+}
+
+/**
+ * Stops the host's managed container or service. Its sessions end; a launch
+ * starts it again.
+ */
+export async function stop(hostId: string | number): Promise<void> {
+  try {
+    await app().api.post(`/stop/${encodeURIComponent(String(hostId))}`, {});
   } catch (error) {
     throw apiError(error);
   }

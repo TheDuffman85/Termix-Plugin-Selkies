@@ -1,5 +1,8 @@
 import express, { type Request, type Response, type Router } from "express";
-import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
+import type {
+  PluginContext,
+  PluginProtocolTarget,
+} from "@termix-ssh/plugin-sdk/backend";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ContainerManager } from "./containers.js";
 import {
@@ -35,8 +38,17 @@ export interface UpstreamInput {
 
 type Failure = { status: number; code: string; error: string };
 
-function fail(res: Response, failure: Failure): void {
-  res.status(failure.status).json({ error: failure.error, code: failure.code });
+/**
+ * `managed` tells the tab it may offer Restart desktop and Stop desktop: the
+ * host has automatic startup on, so the plugin can restart or stop Selkies
+ * over SSH.
+ */
+function fail(res: Response, failure: Failure, managed = false): void {
+  res.status(failure.status).json({
+    error: failure.error,
+    code: failure.code,
+    ...(managed ? { managed: true } : {}),
+  });
 }
 
 export function parseHostId(value: unknown): number | null {
@@ -84,12 +96,14 @@ function message(error: unknown): string {
 function containerFailure(
   error: unknown,
   kind: SelkiesHostSettings["manageKind"],
+  action: "start" | "restart" | "stop" = "start",
 ): Failure {
   const reason = message(error);
   const code = (error as { code?: unknown } | null)?.code;
   const docker = kind === "docker";
   const what = docker ? "Docker" : "systemd";
-  const context = `Automatic ${what} startup uses this host's SSH connection, even when the desktop route is Direct.`;
+  const doing = action === "start" ? "startup" : action;
+  const context = `Automatic ${what} ${doing} uses this host's SSH connection, even when the desktop route is Direct.`;
   if (
     code === "HOST_KEY_UNVERIFIED" ||
     /host's key is not trusted yet/i.test(reason)
@@ -97,24 +111,24 @@ function containerFailure(
     return {
       status: 502,
       code: "container-ssh-unverified",
-      error: `${what} startup is blocked because this host's SSH key is not trusted yet. Open a normal SSH terminal for this same host entry in Termix, verify its fingerprint and trust the key, then reconnect to Selkies. ${context}`,
+      error: `${what} ${doing} is blocked because this host's SSH key is not trusted yet. Open a normal SSH terminal for this same host entry in Termix, verify its fingerprint and trust the key, then reconnect to Selkies. ${context}`,
     };
   }
   if (code === "HOST_KEY_CHANGED" || /host's key has changed/i.test(reason)) {
     return {
       status: 502,
       code: "container-ssh-key-changed",
-      error: `${what} startup is blocked because this host's SSH key has changed. Open a normal SSH terminal for this same host entry in Termix and verify the new fingerprint before trusting it, then reconnect to Selkies. ${context}`,
+      error: `${what} ${doing} is blocked because this host's SSH key has changed. Open a normal SSH terminal for this same host entry in Termix and verify the new fingerprint before trusting it, then reconnect to Selkies. ${context}`,
     };
   }
   return {
     status: 502,
     code: "container-failed",
     error: docker
-      ? `Could not start the Docker container over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, then check the container name and the SSH user's Docker permissions. ${context} Details: ${reason}`
+      ? `Could not ${action} the Docker container over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, then check the container name and the SSH user's Docker permissions. ${context} Details: ${reason}`
       : kind === "systemd-user"
-        ? `Could not start the systemd user service over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, that the unit exists for the SSH user, and that lingering is enabled for that user (loginctl enable-linger). ${context} Details: ${reason}`
-        : `Could not start the systemd service over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, that the unit exists, and that the SSH user may start and stop it without a password prompt (root, or a polkit rule). ${context} Details: ${reason}`,
+        ? `Could not ${action} the systemd user service over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, that the unit exists for the SSH user, and that lingering is enabled for that user (loginctl enable-linger). ${context} Details: ${reason}`
+        : `Could not ${action} the systemd service over SSH. Check that a normal SSH terminal can connect to this same host entry in Termix, that the unit exists, and that the SSH user may start, stop and restart it without a password prompt (root, or a polkit rule). ${context} Details: ${reason}`,
   };
 }
 
@@ -241,20 +255,16 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
     });
 
   /**
-   * Resolves a host the actor may connect to, its login and settings, and
-   * opens the way to its container. Answers the request itself on failure.
+   * Resolves a host the actor may connect to, with Selkies on, and its
+   * settings. Answers the request itself on failure.
    */
-  async function prepare(
+  async function resolveHost(
     req: Request,
     res: Response,
-    gone: () => boolean = () => false,
   ): Promise<{
     hostId: number;
-    name: string;
+    target: PluginProtocolTarget;
     settings: SelkiesHostSettings;
-    ip: string;
-    upstream: Upstream;
-    release: () => void;
   } | null> {
     if (!(await enabled())) {
       fail(res, disabled);
@@ -287,6 +297,29 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       });
       return null;
     }
+    return { hostId, target, settings };
+  }
+
+  /**
+   * Resolves the host as resolveHost does, starts a managed container, and
+   * opens the way to it. Answers the request itself on failure.
+   */
+  async function prepare(
+    req: Request,
+    res: Response,
+    gone: () => boolean = () => false,
+  ): Promise<{
+    hostId: number;
+    name: string;
+    settings: SelkiesHostSettings;
+    ip: string;
+    upstream: Upstream;
+    release: () => void;
+  } | null> {
+    const resolved = await resolveHost(req, res);
+    if (!resolved) return null;
+    const { hostId, target, settings } = resolved;
+    const managed = settings.manageContainer;
     let release = () => {};
     if (settings.manageContainer) {
       const userId = ctx.currentActor();
@@ -305,7 +338,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       } catch (error) {
         const refusal = accessRefusal(error);
         if (refusal) res.status(403).json(refusal);
-        else fail(res, containerFailure(error, settings.manageKind));
+        else fail(res, containerFailure(error, settings.manageKind), managed);
         return null;
       }
     }
@@ -320,7 +353,11 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       });
     } catch (error) {
       release();
-      fail(res, { status: 502, code: "unreachable", error: message(error) });
+      fail(
+        res,
+        { status: 502, code: "unreachable", error: message(error) },
+        managed,
+      );
       return null;
     }
     try {
@@ -352,13 +389,17 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       if (failure) {
         upstream.close();
         release();
-        fail(res, failure);
+        fail(res, failure, managed);
         return null;
       }
     } catch (error) {
       upstream.close();
       release();
-      fail(res, { status: 502, code: "unreachable", error: message(error) });
+      fail(
+        res,
+        { status: 502, code: "unreachable", error: message(error) },
+        managed,
+      );
       return null;
     }
     return {
@@ -460,6 +501,7 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
         res.json({
           token: session.token,
           directUrl: directUrl(prepared.settings, prepared.ip),
+          managed: prepared.settings.manageContainer,
         });
       } finally {
         prepared.release();
@@ -504,6 +546,120 @@ export function registerRoutes(router: Router, deps: RouteDeps): void {
       res.json({ ok: true });
     },
   );
+
+  /**
+   * @openapi
+   * /plugin-api/selkies/restart/{hostId}:
+   *   post:
+   *     summary: Restart a host's managed Selkies container or service
+   *     description: >
+   *       For a desktop session that ended or hangs. Runs docker container
+   *       restart or systemctl restart over the host's SSH connection, and ends
+   *       the host's open Selkies sessions. Needs automatic startup on for the
+   *       host. Launch again afterwards to open the new desktop.
+   *     tags:
+   *       - Selkies
+   *     parameters:
+   *       - in: path
+   *         name: hostId
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     responses:
+   *       200:
+   *         description: The container or service was restarted
+   *       400:
+   *         description: Invalid host id
+   *       403:
+   *         description: No permission or connect access to the host
+   *       404:
+   *         description: Host not found
+   *       409:
+   *         description: Selkies or automatic startup is off for the host
+   *       502:
+   *         description: The restart over SSH failed
+   *       503:
+   *         description: Selkies is turned off on this server
+   */
+  /** Restarts or stops a host's managed container or service on request. */
+  function lifecycleRoute(action: "restart" | "stop") {
+    return async (req: Request, res: Response) => {
+      const userId = ctx.currentActor();
+      if (!userId) {
+        fail(res, {
+          status: 401,
+          code: "unauthenticated",
+          error: "Sign in first",
+        });
+        return;
+      }
+      const resolved = await resolveHost(req, res);
+      if (!resolved) return;
+      const { hostId, settings } = resolved;
+      if (!settings.manageContainer || !deps.containers) {
+        fail(res, {
+          status: 409,
+          code: "not-managed",
+          error:
+            "Restarting or stopping Selkies needs Start and stop Selkies automatically turned on for this host",
+        });
+        return;
+      }
+      try {
+        await deps.containers[action](hostId, userId, settings);
+      } catch (error) {
+        const refusal = accessRefusal(error);
+        if (refusal) res.status(403).json(refusal);
+        else
+          fail(res, containerFailure(error, settings.manageKind, action), true);
+        return;
+      }
+      res.json({ ok: true });
+    };
+  }
+
+  router.post(
+    "/restart/:hostId",
+    requireConnect,
+    json,
+    lifecycleRoute("restart"),
+  );
+
+  /**
+   * @openapi
+   * /plugin-api/selkies/stop/{hostId}:
+   *   post:
+   *     summary: Stop a host's managed Selkies container or service
+   *     description: >
+   *       Runs docker container stop or systemctl stop over the host's SSH
+   *       connection now, as idle shutdown would, and ends the host's open
+   *       Selkies sessions. Needs automatic startup on for the host. A launch
+   *       afterwards starts it again.
+   *     tags:
+   *       - Selkies
+   *     parameters:
+   *       - in: path
+   *         name: hostId
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     responses:
+   *       200:
+   *         description: The container or service was stopped
+   *       400:
+   *         description: Invalid host id
+   *       403:
+   *         description: No permission or connect access to the host
+   *       404:
+   *         description: Host not found
+   *       409:
+   *         description: Selkies or automatic startup is off for the host
+   *       502:
+   *         description: The stop over SSH failed
+   *       503:
+   *         description: Selkies is turned off on this server
+   */
+  router.post("/stop/:hostId", requireConnect, json, lifecycleRoute("stop"));
 
   /**
    * @openapi

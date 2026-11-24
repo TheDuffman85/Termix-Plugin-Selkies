@@ -11,6 +11,18 @@
       "permission": "selkies.connect",
       "resource": { "kind": "host", "min": "connect" }
     },
+    "POST /plugin-api/selkies/restart/:hostId": {
+      "access": "user",
+      "permission": "selkies.connect",
+      "resource": { "kind": "host", "min": "connect" },
+      "note": "Restarts the host's managed container or service over SSH; needs automatic startup on"
+    },
+    "POST /plugin-api/selkies/stop/:hostId": {
+      "access": "user",
+      "permission": "selkies.connect",
+      "resource": { "kind": "host", "min": "connect" },
+      "note": "Stops the host's managed container or service over SSH; needs automatic startup on"
+    },
     "POST /plugin-api/selkies/sessions/:token/close": {
       "access": "user",
       "permission": "selkies.connect",

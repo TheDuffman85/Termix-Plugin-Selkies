@@ -7,7 +7,21 @@
     "title": "Selkies",
     "noHost": "Pick a host with Selkies turned on.",
     "connecting": "Opening the desktop…",
+    "restarting": "Restarting the desktop…",
+    "stopping": "Stopping the desktop…",
     "reconnect": "Reconnect",
+    "restart": {
+      "button": "Restart desktop",
+      "title": "Restart the desktop?",
+      "description": "Restarts Selkies and its desktop session on the host. Use it when the desktop was logged out or stopped responding. Apps open in the desktop close without saving, and everyone connected to this host's desktop is disconnected.",
+      "confirm": "Restart"
+    },
+    "stop": {
+      "button": "Stop desktop",
+      "title": "Stop the desktop?",
+      "description": "Stops Selkies and its desktop session on the host now, instead of waiting for the idle timer. Apps open in the desktop close without saving, and everyone connected to this host's desktop is disconnected. Opening the desktop again starts it.",
+      "confirm": "Stop"
+    },
     "openInBrowser": "Open in browser",
     "browserHint": "Microphone, gamepads and fullscreen work in the browser window.",
     "palette": "Open Selkies desktop",
@@ -26,9 +40,14 @@
       "tokenRequired": "The Selkies server is in secure mode and wants a valid access token. Check the access token in the host's Selkies login.",
       "websocketModeInactive": "The Selkies server is in WebRTC mode, which can't go through Termix. Switch it to WebSocket mode.",
       "forbidden": "You may not connect to this host.",
-      "tooManySessions": "Too many Selkies desktops are open on this server. Close one and try again."
+      "tooManySessions": "Too many Selkies desktops are open on this server. Close one and try again.",
+      "notManaged": "Restarting or stopping the desktop needs Start and stop Selkies automatically turned on for this host.",
+      "restartFailed": "The desktop could not be restarted.",
+      "stopFailed": "The desktop could not be stopped."
     },
-    "disconnected": "The desktop is disconnected."
+    "disconnected": "The desktop is disconnected.",
+    "stopped": "The desktop is stopped. Start it again when you need it.",
+    "startDesktop": "Start desktop"
   },
   "hosts": {
     "title": "Selkies",
